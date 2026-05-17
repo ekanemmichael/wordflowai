@@ -102,13 +102,14 @@ Rules:
 
     let detection: z.infer<typeof DetectionSchema>;
     try {
-      const result = await generateText({
+      const result = await generateObject({
         model,
         system: systemPrompt,
         prompt: `Sermon text:\n"""${data.text}"""`,
-        experimental_output: Output.object({ schema: DetectionSchema }),
+        schema: DetectionSchema,
+        mode: "json",
       });
-      detection = result.experimental_output as z.infer<typeof DetectionSchema>;
+      detection = result.object;
     } catch (err) {
       return {
         references: [] as ResolvedVerse[],
@@ -119,15 +120,18 @@ Rules:
     const refs = detection.references.slice(0, 3);
     const resolved: ResolvedVerse[] = await Promise.all(
       refs.map(async (r) => {
-        if (r.verse_start == null) {
+        if (!r.verse_start || r.verse_start <= 0) {
           // Implied — no specific verses, skip text fetch
           return {
             ...r,
+            verse_start: null,
+            verse_end: null,
             text: null,
             translation: data.translation,
             fetched: false,
           };
         }
+
         const lookupRef =
           r.verse_end && r.verse_end !== r.verse_start
             ? `${r.book} ${r.chapter}:${r.verse_start}-${r.verse_end}`
