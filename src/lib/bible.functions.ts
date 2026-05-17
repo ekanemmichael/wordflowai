@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { generateText, Output } from "ai";
+import { generateObject } from "ai";
 import { z } from "zod";
 import { createLovableAiGatewayProvider } from "./ai-gateway";
 
@@ -10,16 +10,14 @@ const DetectionSchema = z.object({
         reference: z
           .string()
           .describe('Canonical reference, e.g. "John 3:16" or "Romans 8:28-30"'),
-        book: z.string(),
-        chapter: z.number().int(),
-        verse_start: z.number().int().nullable(),
-        verse_end: z.number().int().nullable(),
+        book: z.string().describe("Normalized book name, e.g. 'John', '1 Corinthians', 'Psalm'"),
+        chapter: z.number().int().describe("Chapter number. Use 1 if unknown."),
+        verse_start: z.number().int().describe("First verse, or 0 if no specific verse"),
+        verse_end: z.number().int().describe("Last verse, or 0 if single/none"),
         detection_method: z.enum(["explicit", "implied", "quotation"]),
         confidence: z.enum(["high", "medium", "low"]),
-        translation_hint: z.string().nullable(),
       }),
-    )
-    .max(5),
+    ),
 });
 
 type Detection = z.infer<typeof DetectionSchema>["references"][number];
