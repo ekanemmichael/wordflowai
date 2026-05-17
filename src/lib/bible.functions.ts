@@ -22,7 +22,9 @@ const DetectionSchema = z.object({
 
 type Detection = z.infer<typeof DetectionSchema>["references"][number];
 
-export type ResolvedVerse = Detection & {
+export type ResolvedVerse = Omit<Detection, "verse_start" | "verse_end"> & {
+  verse_start: number | null;
+  verse_end: number | null;
   text: string | null;
   translation: string;
   fetched: boolean;
