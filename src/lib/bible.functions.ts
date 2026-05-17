@@ -109,7 +109,7 @@ Rules:
         system: systemPrompt,
         prompt: `Sermon text:\n"""${data.text}"""`,
         schema: DetectionSchema,
-        mode: "json",
+        
       });
       detection = result.object;
     } catch (err) {
