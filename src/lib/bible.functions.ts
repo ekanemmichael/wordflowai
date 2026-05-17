@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { generateText, Output } from "ai";
+import { generateObject } from "ai";
 import { z } from "zod";
 import { createLovableAiGatewayProvider } from "./ai-gateway";
 
@@ -10,21 +10,21 @@ const DetectionSchema = z.object({
         reference: z
           .string()
           .describe('Canonical reference, e.g. "John 3:16" or "Romans 8:28-30"'),
-        book: z.string(),
-        chapter: z.number().int(),
-        verse_start: z.number().int().nullable(),
-        verse_end: z.number().int().nullable(),
+        book: z.string().describe("Normalized book name, e.g. 'John', '1 Corinthians', 'Psalm'"),
+        chapter: z.number().int().describe("Chapter number. Use 1 if unknown."),
+        verse_start: z.number().int().describe("First verse, or 0 if no specific verse"),
+        verse_end: z.number().int().describe("Last verse, or 0 if single/none"),
         detection_method: z.enum(["explicit", "implied", "quotation"]),
         confidence: z.enum(["high", "medium", "low"]),
-        translation_hint: z.string().nullable(),
       }),
-    )
-    .max(5),
+    ),
 });
 
 type Detection = z.infer<typeof DetectionSchema>["references"][number];
 
-export type ResolvedVerse = Detection & {
+export type ResolvedVerse = Omit<Detection, "verse_start" | "verse_end"> & {
+  verse_start: number | null;
+  verse_end: number | null;
   text: string | null;
   translation: string;
   fetched: boolean;
@@ -104,13 +104,14 @@ Rules:
 
     let detection: z.infer<typeof DetectionSchema>;
     try {
-      const result = await generateText({
+      const result = await generateObject({
         model,
         system: systemPrompt,
         prompt: `Sermon text:\n"""${data.text}"""`,
-        experimental_output: Output.object({ schema: DetectionSchema }),
+        schema: DetectionSchema,
+        
       });
-      detection = result.experimental_output as z.infer<typeof DetectionSchema>;
+      detection = result.object;
     } catch (err) {
       return {
         references: [] as ResolvedVerse[],
@@ -121,15 +122,18 @@ Rules:
     const refs = detection.references.slice(0, 3);
     const resolved: ResolvedVerse[] = await Promise.all(
       refs.map(async (r) => {
-        if (r.verse_start == null) {
+        if (!r.verse_start || r.verse_start <= 0) {
           // Implied — no specific verses, skip text fetch
           return {
             ...r,
+            verse_start: null,
+            verse_end: null,
             text: null,
             translation: data.translation,
             fetched: false,
           };
         }
+
         const lookupRef =
           r.verse_end && r.verse_end !== r.verse_start
             ? `${r.book} ${r.chapter}:${r.verse_start}-${r.verse_end}`
