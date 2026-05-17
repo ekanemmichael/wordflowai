@@ -108,9 +108,9 @@ Rules:
         model,
         system: systemPrompt,
         prompt: `Sermon text:\n"""${data.text}"""`,
-        output: Output.object({ schema: DetectionSchema }),
+        experimental_output: Output.object({ schema: DetectionSchema }),
       });
-      detection = result.output;
+      detection = result.experimental_output as z.infer<typeof DetectionSchema>;
     } catch (err) {
       return {
         references: [] as ResolvedVerse[],
