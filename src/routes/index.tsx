@@ -131,6 +131,17 @@ function OperatorConsole() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {speech.supported && (
+            <Button
+              size="sm"
+              variant={speech.listening ? "default" : "outline"}
+              onClick={() => (speech.listening ? speech.stop() : speech.start())}
+              className={`gap-2 ${speech.listening ? "bg-gold text-background hover:bg-gold/90" : ""}`}
+            >
+              {speech.listening ? <Mic className="h-4 w-4 animate-pulse" /> : <MicOff className="h-4 w-4" />}
+              {speech.listening ? "Listening…" : "Start mic"}
+            </Button>
+          )}
           <a
             href="/display"
             target="_blank"
