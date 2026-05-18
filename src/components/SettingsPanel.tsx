@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import type { ChurchSettings } from "@/lib/store";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -10,6 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
+import { Upload, X } from "lucide-react";
 
 type Props = {
   settings: ChurchSettings;
@@ -29,57 +31,72 @@ const FONT_OPTIONS = [
 
 const TRANSLATIONS = ["KJV", "WEB", "NIV", "ESV", "NLT", "NKJV"];
 
+function LogoUpload({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => onChange(reader.result as string);
+    reader.readAsDataURL(file);
+  };
+
+  return (
+    <div className="space-y-2">
+      {value ? (
+        <div className="flex items-center gap-3 rounded-lg border border-border bg-muted/30 px-3 py-2">
+          <img src={value} alt="logo preview" className="h-8 w-auto rounded object-contain" />
+          <span className="flex-1 text-xs text-muted-foreground truncate">Logo uploaded</span>
+          <button
+            onClick={() => { onChange(""); if (inputRef.current) inputRef.current.value = ""; }}
+            className="text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={() => inputRef.current?.click()}
+          className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-muted/20 px-4 py-6 text-xs text-muted-foreground hover:border-foreground/30 hover:text-foreground transition-all"
+        >
+          <Upload className="h-4 w-4" />
+          Click to upload logo
+        </button>
+      )}
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={handleFile}
+      />
+    </div>
+  );
+}
+
 export function SettingsPanel({ settings: s, update }: Props) {
   return (
     <div className="space-y-6 text-sm">
       <Section title="Church Identity">
         <Field label="Church name">
-          <Input
-            value={s.church_name}
-            onChange={(e) => update({ church_name: e.target.value })}
-          />
+          <Input value={s.church_name} onChange={(e) => update({ church_name: e.target.value })} />
         </Field>
         <Field label="Tagline">
-          <Input
-            value={s.tagline}
-            onChange={(e) => update({ tagline: e.target.value })}
-          />
+          <Input value={s.tagline} onChange={(e) => update({ tagline: e.target.value })} />
         </Field>
-        <Field label="Logo URL">
-          <Input
-            placeholder="https://…/logo.png"
-            value={s.logo_url}
-            onChange={(e) => update({ logo_url: e.target.value })}
-          />
+        <Field label="Logo">
+          <LogoUpload value={s.logo_url} onChange={(v) => update({ logo_url: v })} />
         </Field>
-        <Toggle
-          label="Show logo on verse"
-          checked={s.show_logo}
-          onChange={(v) => update({ show_logo: v })}
-        />
-        <Toggle
-          label="Show church name"
-          checked={s.show_church_name}
-          onChange={(v) => update({ show_church_name: v })}
-        />
+        <Toggle label="Show logo on screen" checked={s.show_logo} onChange={(v) => update({ show_logo: v })} />
+        <Toggle label="Show church name" checked={s.show_church_name} onChange={(v) => update({ show_church_name: v })} />
       </Section>
 
       <Section title="Colors">
-        <ColorField
-          label="Background"
-          value={s.background_color}
-          onChange={(v) => update({ background_color: v })}
-        />
+        <ColorField label="Background" value={s.background_color} onChange={(v) => update({ background_color: v })} />
         <Field label="Background type">
-          <Select
-            value={s.background_type}
-            onValueChange={(v) =>
-              update({ background_type: v as ChurchSettings["background_type"] })
-            }
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
+          <Select value={s.background_type} onValueChange={(v) => update({ background_type: v as ChurchSettings["background_type"] })}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="solid">Solid</SelectItem>
               <SelectItem value="gradient">Gradient</SelectItem>
@@ -87,93 +104,46 @@ export function SettingsPanel({ settings: s, update }: Props) {
             </SelectContent>
           </Select>
         </Field>
-        {s.background_type === "gradient" ? (
-          <ColorField
-            label="Gradient end"
-            value={s.gradient_end}
-            onChange={(v) => update({ gradient_end: v })}
-          />
-        ) : null}
-        {s.background_type === "image" ? (
+        {s.background_type === "gradient" && (
+          <ColorField label="Gradient end" value={s.gradient_end} onChange={(v) => update({ gradient_end: v })} />
+        )}
+        {s.background_type === "image" && (
           <Field label="Background image URL">
-            <Input
-              value={s.background_image}
-              onChange={(e) => update({ background_image: e.target.value })}
-              placeholder="https://…/bg.jpg"
-            />
+            <Input value={s.background_image} onChange={(e) => update({ background_image: e.target.value })} placeholder="https://…/bg.jpg" />
           </Field>
-        ) : null}
-        <ColorField
-          label="Verse text"
-          value={s.text_color}
-          onChange={(v) => update({ text_color: v })}
-        />
-        <ColorField
-          label="Reference / accent"
-          value={s.reference_color}
-          onChange={(v) => update({ reference_color: v })}
-        />
-        <ColorField
-          label="Secondary (Jesus' words, badge)"
-          value={s.secondary_color}
-          onChange={(v) => update({ secondary_color: v })}
-        />
+        )}
+        <ColorField label="Verse text" value={s.text_color} onChange={(v) => update({ text_color: v })} />
+        <ColorField label="Reference / accent" value={s.reference_color} onChange={(v) => update({ reference_color: v })} />
+        <ColorField label="Secondary (badge, highlights)" value={s.secondary_color} onChange={(v) => update({ secondary_color: v })} />
       </Section>
 
       <Section title="Typography">
         <Field label="Verse font">
-          <Select
-            value={s.verse_font}
-            onValueChange={(v) => update({ verse_font: v })}
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
+          <Select value={s.verse_font} onValueChange={(v) => update({ verse_font: v })}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
               {FONT_OPTIONS.map((f) => (
-                <SelectItem key={f} value={f} style={{ fontFamily: f }}>
-                  {f}
-                </SelectItem>
+                <SelectItem key={f} value={f} style={{ fontFamily: f }}>{f}</SelectItem>
               ))}
             </SelectContent>
           </Select>
         </Field>
         <Field label="Reference font">
-          <Select
-            value={s.reference_font}
-            onValueChange={(v) => update({ reference_font: v })}
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
+          <Select value={s.reference_font} onValueChange={(v) => update({ reference_font: v })}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
               {FONT_OPTIONS.map((f) => (
-                <SelectItem key={f} value={f} style={{ fontFamily: f }}>
-                  {f}
-                </SelectItem>
+                <SelectItem key={f} value={f} style={{ fontFamily: f }}>{f}</SelectItem>
               ))}
             </SelectContent>
           </Select>
         </Field>
         <Field label={`Verse size — ${s.font_size_verse}px`}>
-          <Slider
-            value={[s.font_size_verse]}
-            min={28}
-            max={96}
-            step={2}
-            onValueChange={([v]) => update({ font_size_verse: v })}
-          />
+          <Slider value={[s.font_size_verse]} min={28} max={96} step={2} onValueChange={([v]) => update({ font_size_verse: v })} />
         </Field>
         <Field label="Text alignment">
-          <Select
-            value={s.text_alignment}
-            onValueChange={(v) =>
-              update({ text_alignment: v as ChurchSettings["text_alignment"] })
-            }
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
+          <Select value={s.text_alignment} onValueChange={(v) => update({ text_alignment: v as ChurchSettings["text_alignment"] })}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="left">Left</SelectItem>
               <SelectItem value="center">Center</SelectItem>
@@ -183,17 +153,10 @@ export function SettingsPanel({ settings: s, update }: Props) {
         </Field>
       </Section>
 
-      <Section title="Layout & motion">
+      <Section title="Layout & Motion">
         <Field label="Template">
-          <Select
-            value={s.template}
-            onValueChange={(v) =>
-              update({ template: v as ChurchSettings["template"] })
-            }
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
+          <Select value={s.template} onValueChange={(v) => update({ template: v as ChurchSettings["template"] })}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="centered-card">Centered card</SelectItem>
               <SelectItem value="full-bleed">Full bleed</SelectItem>
@@ -203,15 +166,8 @@ export function SettingsPanel({ settings: s, update }: Props) {
           </Select>
         </Field>
         <Field label="Animation">
-          <Select
-            value={s.animation}
-            onValueChange={(v) =>
-              update({ animation: v as ChurchSettings["animation"] })
-            }
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
+          <Select value={s.animation} onValueChange={(v) => update({ animation: v as ChurchSettings["animation"] })}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="fade-up">Fade up</SelectItem>
               <SelectItem value="fade">Fade</SelectItem>
@@ -220,46 +176,22 @@ export function SettingsPanel({ settings: s, update }: Props) {
             </SelectContent>
           </Select>
         </Field>
-        <Toggle
-          label="Translation badge"
-          checked={s.show_translation_badge}
-          onChange={(v) => update({ show_translation_badge: v })}
-        />
-        <Toggle
-          label="Red-letter mode (Jesus' words)"
-          checked={s.red_letter_mode}
-          onChange={(v) => update({ red_letter_mode: v })}
-        />
-        <Toggle
-          label="Powered by WordFlow"
-          checked={s.show_powered_by}
-          onChange={(v) => update({ show_powered_by: v })}
-        />
+        <Toggle label="Translation badge" checked={s.show_translation_badge} onChange={(v) => update({ show_translation_badge: v })} />
+        <Toggle label="Red-letter mode (Jesus' words)" checked={s.red_letter_mode} onChange={(v) => update({ red_letter_mode: v })} />
+        <Toggle label="Show 'Powered by WordFlow'" checked={s.show_powered_by} onChange={(v) => update({ show_powered_by: v })} />
       </Section>
 
       <Section title="Translation">
-        <Field label="Preferred translation">
-          <Select
-            value={s.translation}
-            onValueChange={(v) => update({ translation: v })}
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
+        <Field label="Default translation">
+          <Select value={s.translation} onValueChange={(v) => update({ translation: v })}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
               {TRANSLATIONS.map((t) => (
-                <SelectItem key={t} value={t}>
-                  {t}
-                  {t === "KJV" || t === "WEB" ? " (free)" : ""}
-                </SelectItem>
+                <SelectItem key={t} value={t}>{t}</SelectItem>
               ))}
             </SelectContent>
           </Select>
         </Field>
-        <p className="text-xs text-muted-foreground">
-          KJV and WEB are always available. NIV, ESV, NLT, and NKJV are
-          supported when configured by your administrator.
-        </p>
       </Section>
     </div>
   );
@@ -268,9 +200,7 @@ export function SettingsPanel({ settings: s, update }: Props) {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="space-y-3">
-      <h3 className="font-display text-gold text-xs uppercase tracking-[0.25em]">
-        {title}
-      </h3>
+      <h3 className="font-display text-gold text-xs uppercase tracking-[0.25em]">{title}</h3>
       <div className="space-y-3">{children}</div>
     </div>
   );
@@ -285,15 +215,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function Toggle({
-  label,
-  checked,
-  onChange,
-}: {
-  label: string;
-  checked: boolean;
-  onChange: (v: boolean) => void;
-}) {
+function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
     <div className="flex items-center justify-between">
       <Label className="text-xs">{label}</Label>
@@ -302,15 +224,7 @@ function Toggle({
   );
 }
 
-function ColorField({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-}) {
+function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
   return (
     <div className="space-y-1.5">
       <Label className="text-xs text-muted-foreground">{label}</Label>
@@ -321,11 +235,7 @@ function ColorField({
           onChange={(e) => onChange(e.target.value)}
           className="h-9 w-12 cursor-pointer rounded-md border border-border bg-transparent"
         />
-        <Input
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className="font-mono text-xs"
-        />
+        <Input value={value} onChange={(e) => onChange(e.target.value)} className="font-mono text-xs" />
       </div>
     </div>
   );

@@ -15,7 +15,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-import { Settings, Sparkles, ExternalLink, X, Mic, MicOff, Radio } from "lucide-react";
+import { Settings, Sparkles, ExternalLink, X, Mic, MicOff, Radio, BookOpen } from "lucide-react";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -27,8 +27,6 @@ export const Route = createFileRoute("/")({
   component: OperatorConsole,
 });
 
-// ─── Translation detection from speech ───────────────────────────────────────
-
 const TRANSLATION_PATTERNS: { regex: RegExp; code: string }[] = [
   { regex: /\bNIV\b|\bnew international\b/i, code: "NIV" },
   { regex: /\bESV\b|\benglish standard\b/i, code: "ESV" },
@@ -38,14 +36,12 @@ const TRANSLATION_PATTERNS: { regex: RegExp; code: string }[] = [
   { regex: /\bWEB\b|\bworld english\b/i, code: "WEB" },
 ];
 
-function detectTranslationFromText(text: string): string | null {
+function detectTranslation(text: string): string | null {
   for (const { regex, code } of TRANSLATION_PATTERNS) {
     if (regex.test(text)) return code;
   }
   return null;
 }
-
-// ─── Main component ───────────────────────────────────────────────────────────
 
 function OperatorConsole() {
   const { settings, update } = useSettings();
@@ -62,8 +58,7 @@ function OperatorConsole() {
 
   const { interimTranscript, isListening, supported: micSupported, start: startMic, stop: stopMic } =
     useSpeechRecognition({
-      onFinalResult: (text) =>
-        setSermon((prev) => (prev ? prev + " " + text : text)),
+      onFinalResult: (text) => setSermon((prev) => (prev ? prev + " " + text : text)),
     });
 
   const runDetect = useCallback(
@@ -72,25 +67,27 @@ function OperatorConsole() {
       if (text === lastQueryRef.current) return;
       lastQueryRef.current = text;
 
-      // Auto-switch translation if pastor mentions one
-      const mentioned = detectTranslationFromText(text);
+      const mentioned = detectTranslation(text);
       if (mentioned && mentioned !== settings.translation) {
         update({ translation: mentioned });
-        toast.info(`Translation → ${mentioned}`, { duration: 2500 });
+        toast.info(`Translation switched to ${mentioned}`, { duration: 2500 });
       }
       const activeTranslation = mentioned ?? settings.translation;
 
       setLoading(true);
       setError(null);
       try {
-        const res = await detect({
-          data: { text, translation: activeTranslation },
-        });
+        const res = await detect({ data: { text, translation: activeTranslation } });
         if (res.error) setError(res.error);
         setResults(res.references);
 
-        // Auto-display first high-confidence reference immediately
-        const autoVerse = res.references.find((r) => r.confidence === "high");
+        // Auto-display best detected reference immediately
+        const autoVerse =
+          res.references.find((r) => r.text && r.confidence === "high") ??
+          res.references.find((r) => r.text && r.confidence === "medium") ??
+          res.references.find((r) => r.text) ??
+          res.references[0];
+
         if (autoVerse && autoVerse.reference !== lastAutoRef.current) {
           lastAutoRef.current = autoVerse.reference;
           broadcastVerse({
@@ -100,7 +97,7 @@ function OperatorConsole() {
             visible: true,
             ts: Date.now(),
           });
-          toast.success(`Now displaying: ${autoVerse.reference}`, {
+          toast.success(`Now showing: ${autoVerse.reference}`, {
             description: autoVerse.translation,
             duration: 3000,
           });
@@ -114,13 +111,10 @@ function OperatorConsole() {
     [detect, settings.translation, update],
   );
 
-  // Debounced auto-detect on transcript change
   useEffect(() => {
     if (debounceRef.current) window.clearTimeout(debounceRef.current);
     debounceRef.current = window.setTimeout(() => runDetect(sermon), 1200);
-    return () => {
-      if (debounceRef.current) window.clearTimeout(debounceRef.current);
-    };
+    return () => { if (debounceRef.current) window.clearTimeout(debounceRef.current); };
   }, [sermon, runDetect]);
 
   const sendToScreen = (r: ResolvedVerse) => {
@@ -132,47 +126,47 @@ function OperatorConsole() {
     broadcastVerse({ reference: "", text: null, translation: settings.translation, visible: false, ts: Date.now() });
   };
 
-  // Show last ~80 chars of transcript so operator knows it's working
-  const shortTranscript = sermon.length > 80 ? "…" + sermon.slice(-80) : sermon;
+  const shortTranscript = sermon.length > 120 ? "…" + sermon.slice(-120) : sermon;
 
   return (
-    <div className="min-h-screen bg-[#0a0a0f] text-white flex flex-col">
+    <div className="min-h-screen bg-[#07070c] text-white flex flex-col font-sans">
 
       {/* ── Header ── */}
-      <header className="flex items-center justify-between px-6 py-4 border-b border-white/10">
+      <header className="flex items-center justify-between px-6 py-3 border-b border-white/[0.07] backdrop-blur-sm sticky top-0 z-20 bg-[#07070c]/90">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-amber-400 flex items-center justify-center">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center shadow-lg shadow-amber-500/20">
             <Sparkles className="w-4 h-4 text-black" />
           </div>
           <div>
-            <p className="font-semibold text-sm leading-none">WordFlow</p>
-            <p className="text-white/40 text-[10px] tracking-widest uppercase mt-0.5">
+            <p className="font-bold text-sm leading-none tracking-tight">WordFlow</p>
+            <p className="text-white/35 text-[10px] tracking-[0.2em] uppercase mt-0.5">
               {settings.church_name} · {settings.translation}
             </p>
           </div>
         </div>
+
         <div className="flex items-center gap-2">
           <a
             href="/display"
             target="_blank"
             rel="noreferrer"
-            className="flex items-center gap-1.5 text-xs text-white/60 hover:text-white border border-white/10 hover:border-white/30 rounded-md px-3 py-1.5 transition-colors"
+            className="flex items-center gap-1.5 text-[11px] text-white/50 hover:text-white border border-white/10 hover:border-white/25 rounded-lg px-3 py-1.5 transition-all duration-200"
           >
-            <ExternalLink className="w-3.5 h-3.5" />
+            <ExternalLink className="w-3 h-3" />
             Open display
           </a>
           <Sheet>
             <SheetTrigger asChild>
-              <button className="flex items-center gap-1.5 text-xs text-white/60 hover:text-white border border-white/10 hover:border-white/30 rounded-md px-3 py-1.5 transition-colors">
-                <Settings className="w-3.5 h-3.5" />
+              <button className="flex items-center gap-1.5 text-[11px] text-white/50 hover:text-white border border-white/10 hover:border-white/25 rounded-lg px-3 py-1.5 transition-all duration-200">
+                <Settings className="w-3 h-3" />
                 Branding
               </button>
             </SheetTrigger>
             <SheetContent className="w-[420px] overflow-y-auto sm:max-w-[420px]">
               <SheetHeader>
-                <SheetTitle className="font-display">Church branding</SheetTitle>
+                <SheetTitle>Church branding</SheetTitle>
               </SheetHeader>
-              <div className="mt-4">
+              <div className="mt-6">
                 <SettingsPanel settings={settings} update={update} />
               </div>
             </SheetContent>
@@ -180,214 +174,231 @@ function OperatorConsole() {
         </div>
       </header>
 
-      <main className="flex-1 grid lg:grid-cols-[1fr_380px] gap-0 overflow-hidden">
+      <main className="flex-1 grid lg:grid-cols-[1fr_400px] overflow-hidden">
 
-        {/* ── Left: Preview + status ── */}
-        <div className="flex flex-col p-6 gap-4 border-r border-white/10">
+        {/* ── Left: Projector preview + on-air bar ── */}
+        <div className="flex flex-col p-6 gap-4 border-r border-white/[0.07]">
 
-          {/* Projector preview */}
-          <div className="flex-1 min-h-0 flex flex-col gap-3">
-            <p className="text-[10px] font-semibold tracking-[0.25em] uppercase text-white/40">
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] font-semibold tracking-[0.3em] uppercase text-white/30">
               Projector preview
             </p>
-            <div className="flex-1 min-h-0 rounded-xl overflow-hidden border border-white/10 shadow-2xl">
-              <VerseSlide settings={settings} verse={liveVerse} preview />
-            </div>
-          </div>
-
-          {/* ON AIR status bar */}
-          <div className="flex items-center justify-between bg-white/5 rounded-xl px-4 py-3 border border-white/10">
-            <div className="flex items-center gap-3">
-              <span className={`flex items-center gap-1.5 text-xs font-semibold ${liveVerse.visible ? "text-amber-400" : "text-white/30"}`}>
-                <Radio className={`w-3 h-3 ${liveVerse.visible ? "animate-pulse" : ""}`} />
-                {liveVerse.visible ? "ON AIR" : "IDLE"}
-              </span>
+            <div className="flex items-center gap-2">
               {liveVerse.visible && liveVerse.reference && (
-                <>
-                  <span className="text-white/20">·</span>
-                  <span className="text-sm font-semibold text-white">{liveVerse.reference}</span>
-                  <span className="text-xs text-white/40 bg-white/10 rounded px-2 py-0.5">
-                    {liveVerse.translation}
-                  </span>
-                </>
+                <span className="text-[10px] text-amber-400/80 bg-amber-400/10 border border-amber-400/20 rounded-full px-2.5 py-0.5 animate-in fade-in duration-300">
+                  {liveVerse.reference} · {liveVerse.translation}
+                </span>
               )}
+              <button
+                onClick={clearScreen}
+                disabled={!liveVerse.visible}
+                className="flex items-center gap-1 text-[11px] text-white/30 hover:text-white/70 disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
+              >
+                <X className="w-3 h-3" /> Clear
+              </button>
             </div>
-            <button
-              onClick={clearScreen}
-              disabled={!liveVerse.visible}
-              className="flex items-center gap-1 text-xs text-white/40 hover:text-white disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
-            >
-              <X className="w-3.5 h-3.5" /> Clear
-            </button>
           </div>
 
-          <p className="text-white/25 text-[11px] text-center">
-            Drag the display window to your projector — it syncs automatically
+          {/* Preview window */}
+          <div className="flex-1 min-h-0 rounded-2xl overflow-hidden border border-white/[0.07] shadow-[0_0_60px_rgba(0,0,0,0.6)] relative">
+            <VerseSlide settings={settings} verse={liveVerse} preview />
+            {/* ON AIR badge */}
+            {liveVerse.visible && (
+              <div className="absolute top-3 right-3 flex items-center gap-1.5 bg-black/60 backdrop-blur-md rounded-full px-2.5 py-1 border border-red-500/30">
+                <Radio className="w-2.5 h-2.5 text-red-400 animate-pulse" />
+                <span className="text-[10px] font-bold tracking-widest text-red-400 uppercase">On Air</span>
+              </div>
+            )}
+          </div>
+
+          <p className="text-white/20 text-[11px] text-center">
+            Open <span className="text-amber-400/60">/display</span> in a second window and drag it to the projector
           </p>
         </div>
 
-        {/* ── Right: Mic + detected ── */}
-        <div className="flex flex-col p-6 gap-5 overflow-y-auto">
+        {/* ── Right: Mic + detections ── */}
+        <div className="flex flex-col overflow-y-auto">
 
-          {/* Mic control */}
-          <div className="flex flex-col items-center gap-4 py-4">
-            <button
-              onClick={isListening ? stopMic : startMic}
-              disabled={!micSupported}
-              className={`relative w-24 h-24 rounded-full flex items-center justify-center transition-all duration-300 ${
-                isListening
-                  ? "bg-red-500/20 border-2 border-red-500 shadow-[0_0_40px_rgba(239,68,68,0.3)]"
-                  : micSupported
-                    ? "bg-amber-400/10 border-2 border-amber-400/60 hover:bg-amber-400/20 hover:border-amber-400 hover:shadow-[0_0_30px_rgba(251,191,36,0.2)]"
-                    : "bg-white/5 border-2 border-white/10 cursor-not-allowed opacity-40"
-              }`}
-            >
+          {/* Mic section */}
+          <div className="flex flex-col items-center gap-5 px-6 py-8 border-b border-white/[0.07]">
+
+            {/* Mic button */}
+            <div className="relative">
               {isListening && (
-                <span className="absolute inset-0 rounded-full border-2 border-red-400 animate-ping opacity-30" />
+                <>
+                  <span className="absolute inset-0 rounded-full bg-red-500/20 animate-ping" style={{ animationDuration: "1.5s" }} />
+                  <span className="absolute -inset-3 rounded-full border border-red-500/10 animate-ping" style={{ animationDuration: "2s" }} />
+                </>
               )}
-              {isListening
-                ? <MicOff className="w-8 h-8 text-red-400" />
-                : <Mic className="w-8 h-8 text-amber-400" />
-              }
-            </button>
-
-            <div className="text-center">
-              <p className="text-sm font-semibold text-white/80">
-                {isListening ? "Listening…" : micSupported ? "Tap to listen" : "Mic not available"}
-              </p>
-              <p className="text-[11px] text-white/40 mt-1">
+              <button
+                onClick={isListening ? stopMic : startMic}
+                disabled={!micSupported}
+                className={`relative w-20 h-20 rounded-full flex items-center justify-center transition-all duration-300 ${
+                  isListening
+                    ? "bg-red-500/15 border-2 border-red-500 shadow-[0_0_50px_rgba(239,68,68,0.25)]"
+                    : micSupported
+                      ? "bg-amber-400/10 border-2 border-amber-400/50 hover:bg-amber-400/15 hover:border-amber-400 hover:shadow-[0_0_40px_rgba(251,191,36,0.15)] active:scale-95"
+                      : "bg-white/5 border-2 border-white/10 cursor-not-allowed opacity-30"
+                }`}
+              >
                 {isListening
-                  ? "Detecting references automatically"
-                  : micSupported
-                    ? "Works best in Chrome or Edge"
-                    : "Use Chrome or Edge for mic support"
+                  ? <MicOff className="w-7 h-7 text-red-400" />
+                  : <Mic className="w-7 h-7 text-amber-400" />
                 }
+              </button>
+            </div>
+
+            <div className="text-center space-y-1">
+              <p className="text-sm font-semibold text-white/80">
+                {isListening ? "Listening…" : micSupported ? "Tap to start listening" : "Mic not supported"}
+              </p>
+              <p className="text-[11px] text-white/30">
+                {isListening
+                  ? "Auto-displaying verses as they're spoken"
+                  : micSupported
+                    ? "Chrome or Edge recommended"
+                    : "Switch to Chrome or Edge"}
               </p>
             </div>
 
-            {/* Live transcript tail */}
+            {/* Live transcript */}
             {(sermon || interimTranscript) && (
-              <div className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2">
-                <p className="text-[11px] text-white/40 uppercase tracking-widest mb-1">Transcript</p>
-                <p className="text-xs text-white/60 leading-relaxed line-clamp-3">
+              <div className="w-full rounded-xl bg-white/[0.04] border border-white/[0.08] px-4 py-3 space-y-1.5 animate-in slide-in-from-bottom-2 duration-300">
+                <p className="text-[9px] font-semibold tracking-[0.3em] uppercase text-white/25">Live transcript</p>
+                <p className="text-xs text-white/55 leading-relaxed">
                   {shortTranscript}
                   {interimTranscript && (
-                    <span className="text-white/30 italic"> {interimTranscript}</span>
+                    <span className="text-white/25 italic"> {interimTranscript}</span>
                   )}
                 </p>
-                {sermon && (
-                  <button
-                    onClick={() => { setSermon(""); setResults([]); lastQueryRef.current = ""; lastAutoRef.current = ""; }}
-                    className="text-[10px] text-white/30 hover:text-white/60 mt-1 transition-colors"
-                  >
-                    Clear transcript
-                  </button>
-                )}
+                <button
+                  onClick={() => { setSermon(""); setResults([]); lastQueryRef.current = ""; lastAutoRef.current = ""; }}
+                  className="text-[10px] text-white/25 hover:text-white/50 transition-colors"
+                >
+                  Clear
+                </button>
               </div>
             )}
 
             {/* Status */}
             {loading && (
-              <p className="text-[11px] text-amber-400/70 animate-pulse">Detecting references…</p>
+              <div className="flex items-center gap-2 animate-in fade-in duration-200">
+                <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-bounce" style={{ animationDelay: "0ms" }} />
+                <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-bounce" style={{ animationDelay: "150ms" }} />
+                <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-bounce" style={{ animationDelay: "300ms" }} />
+                <span className="text-[11px] text-amber-400/70 ml-1">Detecting…</span>
+              </div>
             )}
             {error && !loading && (
-              <p className="text-[11px] text-white/40 text-center max-w-[220px]">⚠ {error}</p>
+              <p className="text-[11px] text-red-400/60 text-center max-w-[220px]">⚠ {error}</p>
             )}
           </div>
 
           {/* Detected references */}
-          <div className="flex flex-col gap-3">
-            <p className="text-[10px] font-semibold tracking-[0.25em] uppercase text-white/40">
+          <div className="flex-1 px-6 py-5 space-y-3">
+            <p className="text-[10px] font-semibold tracking-[0.3em] uppercase text-white/30">
               Detected references
             </p>
 
             {results.length === 0 ? (
-              <div className="rounded-xl border border-white/10 border-dashed p-6 text-center">
-                <p className="text-xs text-white/30">
+              <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-white/[0.07] border-dashed py-10">
+                <BookOpen className="w-6 h-6 text-white/15" />
+                <p className="text-xs text-white/25 text-center max-w-[180px] leading-relaxed">
                   {isListening
                     ? "Listening for Bible references…"
-                    : "Start the mic or type in the transcript box"}
+                    : "Tap the mic and start preaching"}
                 </p>
               </div>
             ) : (
-              results.map((r, i) => (
-                <VerseCard
-                  key={`${r.reference}-${i}`}
-                  verse={r}
-                  active={liveVerse.visible && liveVerse.reference === r.reference}
-                  onSend={() => sendToScreen(r)}
-                />
-              ))
+              <div className="space-y-2.5">
+                {results.map((r, i) => (
+                  <VerseCard
+                    key={`${r.reference}-${i}`}
+                    verse={r}
+                    active={liveVerse.visible && liveVerse.reference === r.reference}
+                    onSend={() => sendToScreen(r)}
+                  />
+                ))}
+              </div>
             )}
           </div>
 
-          {/* Manual transcript input (collapsed by default, available as fallback) */}
-          <details className="group">
-            <summary className="text-[10px] text-white/30 cursor-pointer hover:text-white/60 transition-colors select-none list-none flex items-center gap-1">
-              <span className="group-open:rotate-90 transition-transform inline-block">›</span>
-              Manual text input
-            </summary>
-            <textarea
-              value={sermon}
-              onChange={(e) => setSermon(e.target.value)}
-              placeholder='Paste captions or type — e.g. "Turn to John 3:16…"'
-              className="mt-2 w-full h-28 rounded-lg bg-white/5 border border-white/10 text-xs text-white/70 placeholder:text-white/20 p-3 resize-none focus:outline-none focus:border-white/20"
-            />
-          </details>
+          {/* Manual input fallback */}
+          <div className="px-6 pb-6">
+            <details className="group">
+              <summary className="text-[10px] text-white/25 cursor-pointer hover:text-white/50 transition-colors select-none list-none flex items-center gap-1.5 mb-2">
+                <span className="group-open:rotate-90 transition-transform inline-block text-white/40">›</span>
+                Manual text input
+              </summary>
+              <textarea
+                value={sermon}
+                onChange={(e) => setSermon(e.target.value)}
+                placeholder='Paste captions — e.g. "Turn with me to John 3:16…"'
+                className="w-full h-24 rounded-xl bg-white/[0.04] border border-white/10 text-xs text-white/60 placeholder:text-white/20 p-3 resize-none focus:outline-none focus:border-white/20 transition-colors"
+              />
+            </details>
+          </div>
         </div>
       </main>
     </div>
   );
 }
 
-// ─── Verse card ───────────────────────────────────────────────────────────────
-
 function VerseCard({ verse, active, onSend }: { verse: ResolvedVerse; active: boolean; onSend: () => void }) {
-  const confDot =
+  const confColor =
     verse.confidence === "high" ? "bg-emerald-400" :
     verse.confidence === "medium" ? "bg-amber-400" : "bg-red-400";
 
   return (
-    <div className={`rounded-xl border p-4 transition-all ${
-      active
-        ? "border-amber-400/60 bg-amber-400/5 shadow-[0_0_20px_rgba(251,191,36,0.1)]"
-        : "border-white/10 bg-white/5 hover:border-white/20"
-    }`}>
-      <div className="flex items-start justify-between gap-2 mb-2">
-        <div>
+    <div
+      className={`group rounded-2xl border p-4 transition-all duration-300 animate-in slide-in-from-bottom-2 ${
+        active
+          ? "border-amber-400/40 bg-gradient-to-b from-amber-400/8 to-amber-400/3 shadow-[0_0_30px_rgba(251,191,36,0.08)]"
+          : "border-white/[0.08] bg-white/[0.03] hover:border-white/15 hover:bg-white/[0.05]"
+      }`}
+    >
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="space-y-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className={`inline-block w-1.5 h-1.5 rounded-full ${confDot}`} />
-            <span className="font-semibold text-amber-400 text-base leading-none">
+            <span className={`shrink-0 inline-block w-1.5 h-1.5 rounded-full ${confColor}`} />
+            <span className="font-bold text-amber-400 text-base leading-none truncate">
               {verse.reference}
             </span>
+            {active && (
+              <span className="flex items-center gap-1 text-[9px] font-semibold text-red-400 uppercase tracking-widest bg-red-400/10 rounded-full px-1.5 py-0.5">
+                <Radio className="w-2 h-2 animate-pulse" /> Live
+              </span>
+            )}
           </div>
-          <div className="flex items-center gap-1.5 mt-1 text-[10px] text-white/40 uppercase tracking-widest">
+          <div className="flex items-center gap-1.5 text-[10px] text-white/30 uppercase tracking-widest">
             <span>{verse.translation}</span>
             <span>·</span>
             <span>{verse.detection_method}</span>
-            {verse.confidence === "high" && verse.text && (
-              <><span>·</span><span className="text-emerald-400">auto</span></>
-            )}
           </div>
         </div>
         <Button
           size="sm"
           onClick={onSend}
           variant={active ? "secondary" : "default"}
-          className="shrink-0 text-xs h-7"
+          className={`shrink-0 text-[11px] h-7 px-3 transition-all duration-200 ${
+            active ? "opacity-60" : "opacity-0 group-hover:opacity-100"
+          }`}
         >
           {active ? "On screen" : "Display"}
         </Button>
       </div>
-      <p className="text-xs text-white/70 leading-relaxed">
-        {verse.text ?? (
-          <span className="italic text-white/30">
-            {verse.error
-              ? `Couldn't fetch text — ${verse.error}`
-              : "Reference detected — no specific verse to display"}
-          </span>
-        )}
-      </p>
+
+      {verse.text ? (
+        <p className="text-sm text-white/70 leading-relaxed line-clamp-4">
+          {verse.text}
+        </p>
+      ) : (
+        <p className="text-xs text-white/25 italic leading-relaxed">
+          {verse.error
+            ? `Couldn't fetch verse text — ${verse.error}`
+            : "Reference detected — no specific verse to display"}
+        </p>
+      )}
     </div>
   );
 }
