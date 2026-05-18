@@ -64,14 +64,18 @@ function OperatorConsole() {
 
   const runDetect = useCallback(
     async (text: string) => {
-      if (text.trim().length < 8) return;
-      if (text === lastQueryRef.current) return;
-      lastQueryRef.current = text;
+      // Focus on the most recent ~700 chars so live detection tracks what
+      // the pastor JUST said, not what was said five minutes ago.
+      const window = text.length > 700 ? text.slice(-700) : text;
+      const trimmed = window.trim();
+      if (trimmed.length < 8) return;
+      if (trimmed === lastQueryRef.current) return;
+      lastQueryRef.current = trimmed;
       setLoading(true);
       setError(null);
       try {
         const res = await detect({
-          data: { text, translation: settings.translation },
+          data: { text: trimmed, translation: settings.translation },
         });
         if (res.error) setError(res.error);
         setResults(res.references);
