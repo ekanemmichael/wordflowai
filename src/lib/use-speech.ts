@@ -58,7 +58,21 @@ export function useSpeech(opts: {
       if (interimText && onInterim) onInterim(interimText);
     };
     rec.onerror = (e) => {
-      setError(e.error || "speech error");
+      // "no-speech" just means a quiet moment — auto-restart, don't alarm the user.
+      if (e.error === "no-speech" || e.error === "aborted") {
+        return;
+      }
+      const friendly =
+        e.error === "not-allowed" || e.error === "service-not-allowed"
+          ? "Microphone permission denied. Click the lock icon in the address bar to allow it."
+          : e.error === "audio-capture"
+            ? "No microphone detected. Check your input device."
+            : e.error === "network"
+              ? "Speech recognition needs an internet connection."
+              : e.error === "language-not-supported"
+                ? "This language isn't supported by your browser's speech engine."
+                : `Speech error: ${e.error}`;
+      setError(friendly);
       if (e.error === "not-allowed" || e.error === "service-not-allowed") {
         wantOnRef.current = false;
         setListening(false);
