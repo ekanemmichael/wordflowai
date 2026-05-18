@@ -228,8 +228,8 @@ async function fetchViaApiBible(
   const params = "content-type=text&include-verse-numbers=false&include-verse-spans=false&include-titles=false";
   const hasRange = verseEnd && verseEnd !== verseStart;
   const url = hasRange
-    ? `https://api.scripture.api.bible/v1/bibles/${bibleId}/passages/${encodeURIComponent(`${bookCode}.${chapter}.${verseStart}-${bookCode}.${chapter}.${verseEnd}`)}?${params}`
-    : `https://api.scripture.api.bible/v1/bibles/${bibleId}/verses/${encodeURIComponent(`${bookCode}.${chapter}.${verseStart}`)}?${params}`;
+    ? `https://rest.api.bible/v1/bibles/${bibleId}/passages/${encodeURIComponent(`${bookCode}.${chapter}.${verseStart}-${bookCode}.${chapter}.${verseEnd}`)}?${params}`
+    : `https://rest.api.bible/v1/bibles/${bibleId}/verses/${encodeURIComponent(`${bookCode}.${chapter}.${verseStart}`)}?${params}`;
 
   try {
     const res = await fetch(url, { headers: { "api-key": apiKey } });
@@ -295,8 +295,7 @@ export const detectVerses = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const aiKey = process.env.LOVABLE_API_KEY;
-    // API.Bible key is stored server-side only — never exposed to the client
-    const apiBibleKey = process.env.APIBIBLE_KEY;
+    const apiBibleKey = process.env.APIBIBLE_KEY ?? "zSVRj_oOL2SSZg3s8y415";
 
     // ── No AI key: use regex detection for explicit references ──
     if (!aiKey) {
