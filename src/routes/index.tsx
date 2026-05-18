@@ -18,7 +18,8 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-import { Settings, Sparkles, Radio, ExternalLink, X } from "lucide-react";
+import { Settings, Sparkles, Radio, ExternalLink, X, Mic, MicOff } from "lucide-react";
+import { useSpeech } from "@/lib/use-speech";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -40,12 +41,26 @@ function OperatorConsole() {
   const detect = useServerFn(detectVerses);
 
   const [sermon, setSermon] = useState("");
+  const [interim, setInterim] = useState("");
   const [results, setResults] = useState<ResolvedVerse[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [autoDetect, setAutoDetect] = useState(true);
   const lastQueryRef = useRef("");
   const debounceRef = useRef<number | null>(null);
+
+  const handleFinalChunk = useCallback((chunk: string) => {
+    setSermon((prev) => {
+      const sep = prev && !prev.endsWith(" ") ? " " : "";
+      return (prev + sep + chunk.trim()).trim();
+    });
+    setInterim("");
+  }, []);
+
+  const speech = useSpeech({
+    onFinalChunk: handleFinalChunk,
+    onInterim: setInterim,
+  });
 
   const runDetect = useCallback(
     async (text: string) => {
@@ -116,6 +131,17 @@ function OperatorConsole() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {speech.supported && (
+            <Button
+              size="sm"
+              variant={speech.listening ? "default" : "outline"}
+              onClick={() => (speech.listening ? speech.stop() : speech.start())}
+              className={`gap-2 ${speech.listening ? "bg-gold text-background hover:bg-gold/90" : ""}`}
+            >
+              {speech.listening ? <Mic className="h-4 w-4 animate-pulse" /> : <MicOff className="h-4 w-4" />}
+              {speech.listening ? "Listening…" : "Start mic"}
+            </Button>
+          )}
           <a
             href="/display"
             target="_blank"
@@ -164,16 +190,34 @@ function OperatorConsole() {
             <Textarea
               value={sermon}
               onChange={(e) => setSermon(e.target.value)}
-              placeholder='Paste live captions, or type / speak naturally — e.g. "Turn with me to John chapter 3 verse 16, for God so loved the world…"'
+              placeholder='Click "Start mic" above, or type / paste — e.g. "Turn with me to John chapter 3 verse 16, for God so loved the world…"'
               className="min-h-[220px] resize-none text-base leading-relaxed"
             />
+            {interim && (
+              <p className="text-gold/80 mt-2 text-sm italic">
+                <Mic className="mr-1 inline h-3 w-3 animate-pulse" />
+                {interim}
+              </p>
+            )}
+            {!speech.supported && (
+              <p className="mt-2 text-xs text-amber-300/80">
+                ⚠ Live mic needs Chrome, Edge, or Safari. Firefox doesn't support the Web Speech API.
+              </p>
+            )}
+            {speech.error && (
+              <p className="mt-2 text-xs text-rose-300/90">
+                Mic: {speech.error === "not-allowed"
+                  ? "permission denied — allow microphone access in your browser."
+                  : speech.error}
+              </p>
+            )}
             <div className="mt-2 flex items-center justify-between">
               <p className="text-muted-foreground text-xs">
                 {loading
                   ? "Detecting references…"
                   : error
                     ? `⚠ ${error}`
-                    : `${sermon.length} chars · powered by Lovable AI`}
+                    : `${sermon.length} chars · ${speech.listening ? "live mic on" : "powered by Lovable AI"}`}
               </p>
               <Button
                 size="sm"
