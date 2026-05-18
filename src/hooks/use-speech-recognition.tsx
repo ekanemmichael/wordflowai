@@ -45,12 +45,16 @@ export function useSpeechRecognition({
 }: UseSpeechRecognitionOptions): UseSpeechRecognitionReturn {
   const [isListening, setIsListening] = useState(false);
   const [interimTranscript, setInterimTranscript] = useState("");
+  // Start false to avoid SSR mismatch — set to real value after mount
+  const [supported, setSupported] = useState(false);
   const recognitionRef = useRef<ISpeechRecognition | null>(null);
   const keepAliveRef = useRef(false);
   const onFinalRef = useRef(onFinalResult);
   onFinalRef.current = onFinalResult;
 
-  const supported = getSpeechRecognitionCtor() !== null;
+  useEffect(() => {
+    setSupported(getSpeechRecognitionCtor() !== null);
+  }, []);
 
   const buildRecognition = useCallback((): ISpeechRecognition | null => {
     const SR = getSpeechRecognitionCtor();
