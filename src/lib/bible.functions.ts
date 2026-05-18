@@ -31,44 +31,143 @@ export type ResolvedVerse = Omit<Detection, "verse_start" | "verse_end"> & {
   error?: string;
 };
 
-// bible-api.com supports KJV (default) and WEB free of charge
-const SUPPORTED_FREE = new Set(["kjv", "web"]);
+// bible-api.com supports KJV and WEB free of charge
+const BIBLE_API_FREE = new Set(["kjv", "web"]);
 
-async function fetchVerseText(
+// API.Bible (api.bible) Bible IDs for common translations
+const APIBIBLE_IDS: Record<string, string> = {
+  NIV: "06125adad2d5898a-01",
+  ESV: "f421fe261da7624f-01",
+  NLT: "65eec8e0b60e656b-01",
+  NKJV: "de4e12af7f28f599-01",
+  KJV: "de4e12af7f28f599-02",
+  WEB: "9879dbb7cfe39e4d-01",
+};
+
+// USFM book codes required by API.Bible
+const BOOK_CODES: Record<string, string> = {
+  Genesis: "GEN", Exodus: "EXO", Leviticus: "LEV", Numbers: "NUM",
+  Deuteronomy: "DEU", Joshua: "JOS", Judges: "JDG", Ruth: "RUT",
+  "1 Samuel": "1SA", "2 Samuel": "2SA", "1 Kings": "1KI", "2 Kings": "2KI",
+  "1 Chronicles": "1CH", "2 Chronicles": "2CH", Ezra: "EZR", Nehemiah: "NEH",
+  Esther: "EST", Job: "JOB", Psalm: "PSA", Psalms: "PSA",
+  Proverbs: "PRO", Ecclesiastes: "ECC", "Song of Solomon": "SNG",
+  "Song of Songs": "SNG", Isaiah: "ISA", Jeremiah: "JER",
+  Lamentations: "LAM", Ezekiel: "EZK", Daniel: "DAN", Hosea: "HOS",
+  Joel: "JOL", Amos: "AMO", Obadiah: "OBA", Jonah: "JON",
+  Micah: "MIC", Nahum: "NAM", Habakkuk: "HAB", Zephaniah: "ZEP",
+  Haggai: "HAG", Zechariah: "ZEC", Malachi: "MAL",
+  Matthew: "MAT", Mark: "MRK", Luke: "LUK", John: "JHN",
+  Acts: "ACT", Romans: "ROM",
+  "1 Corinthians": "1CO", "2 Corinthians": "2CO",
+  Galatians: "GAL", Ephesians: "EPH", Philippians: "PHP", Colossians: "COL",
+  "1 Thessalonians": "1TH", "2 Thessalonians": "2TH",
+  "1 Timothy": "1TI", "2 Timothy": "2TI",
+  Titus: "TIT", Philemon: "PHM", Hebrews: "HEB", James: "JAS",
+  "1 Peter": "1PE", "2 Peter": "2PE",
+  "1 John": "1JN", "2 John": "2JN", "3 John": "3JN",
+  Jude: "JUD", Revelation: "REV",
+};
+
+async function fetchViaBibleApi(
   reference: string,
   translation: string,
 ): Promise<{ text: string | null; usedTranslation: string; error?: string }> {
-  const lower = translation.toLowerCase();
-  const tparam = SUPPORTED_FREE.has(lower) ? lower : "kjv";
+  const tparam = translation.toLowerCase();
   const url = `https://bible-api.com/${encodeURIComponent(reference)}?translation=${tparam}`;
   try {
     const res = await fetch(url);
     if (!res.ok) {
-      return {
-        text: null,
-        usedTranslation: tparam.toUpperCase(),
-        error: `Lookup failed (${res.status})`,
-      };
+      return { text: null, usedTranslation: tparam.toUpperCase(), error: `Lookup failed (${res.status})` };
     }
     const json = (await res.json()) as { text?: string; error?: string };
     if (json.error || !json.text) {
-      return {
-        text: null,
-        usedTranslation: tparam.toUpperCase(),
-        error: json.error ?? "No text returned",
-      };
+      return { text: null, usedTranslation: tparam.toUpperCase(), error: json.error ?? "No text returned" };
     }
-    return {
-      text: json.text.trim().replace(/\s+/g, " "),
-      usedTranslation: tparam.toUpperCase(),
-    };
+    return { text: json.text.trim().replace(/\s+/g, " "), usedTranslation: tparam.toUpperCase() };
   } catch (err) {
-    return {
-      text: null,
-      usedTranslation: tparam.toUpperCase(),
-      error: err instanceof Error ? err.message : "Network error",
-    };
+    return { text: null, usedTranslation: tparam.toUpperCase(), error: err instanceof Error ? err.message : "Network error" };
   }
+}
+
+async function fetchViaApiBible(
+  book: string,
+  chapter: number,
+  verseStart: number,
+  verseEnd: number | null,
+  translation: string,
+  apiKey: string,
+): Promise<{ text: string | null; usedTranslation: string; error?: string }> {
+  const upper = translation.toUpperCase();
+  const bibleId = APIBIBLE_IDS[upper];
+  if (!bibleId) {
+    return { text: null, usedTranslation: upper, error: `Translation ${upper} not configured` };
+  }
+  const bookCode = BOOK_CODES[book];
+  if (!bookCode) {
+    return { text: null, usedTranslation: upper, error: `Unknown book: ${book}` };
+  }
+
+  const hasRange = verseEnd && verseEnd !== verseStart;
+  const baseParams = "content-type=text&include-verse-numbers=false&include-verse-spans=false&include-titles=false";
+
+  let url: string;
+  if (hasRange) {
+    const passageId = `${bookCode}.${chapter}.${verseStart}-${bookCode}.${chapter}.${verseEnd}`;
+    url = `https://api.scripture.api.bible/v1/bibles/${bibleId}/passages/${encodeURIComponent(passageId)}?${baseParams}`;
+  } else {
+    const verseId = `${bookCode}.${chapter}.${verseStart}`;
+    url = `https://api.scripture.api.bible/v1/bibles/${bibleId}/verses/${encodeURIComponent(verseId)}?${baseParams}`;
+  }
+
+  try {
+    const res = await fetch(url, { headers: { "api-key": apiKey } });
+    if (!res.ok) {
+      return { text: null, usedTranslation: upper, error: `API.Bible error (${res.status})` };
+    }
+    const json = (await res.json()) as { data?: { content?: string } };
+    const raw = json.data?.content ?? "";
+    const text = raw.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+    if (!text) {
+      return { text: null, usedTranslation: upper, error: "Empty response from API.Bible" };
+    }
+    return { text, usedTranslation: upper };
+  } catch (err) {
+    return { text: null, usedTranslation: upper, error: err instanceof Error ? err.message : "Network error" };
+  }
+}
+
+async function fetchVerseText(
+  book: string,
+  chapter: number,
+  verseStart: number,
+  verseEnd: number | null,
+  translation: string,
+  apibibleKey?: string,
+): Promise<{ text: string | null; usedTranslation: string; error?: string }> {
+  const lower = translation.toLowerCase();
+
+  // Use free bible-api.com for KJV and WEB
+  if (BIBLE_API_FREE.has(lower)) {
+    const ref =
+      verseEnd && verseEnd !== verseStart
+        ? `${book} ${chapter}:${verseStart}-${verseEnd}`
+        : `${book} ${chapter}:${verseStart}`;
+    return fetchViaBibleApi(ref, translation);
+  }
+
+  // Use API.Bible for premium translations if a key is supplied
+  if (apibibleKey) {
+    return fetchViaApiBible(book, chapter, verseStart, verseEnd, translation, apibibleKey);
+  }
+
+  // No key — fall back to KJV so the display is never empty
+  const ref =
+    verseEnd && verseEnd !== verseStart
+      ? `${book} ${chapter}:${verseStart}-${verseEnd}`
+      : `${book} ${chapter}:${verseStart}`;
+  const result = await fetchViaBibleApi(ref, "kjv");
+  return { ...result, usedTranslation: "KJV (fallback — add API.Bible key for " + translation + ")" };
 }
 
 export const detectVerses = createServerFn({ method: "POST" })
@@ -76,6 +175,7 @@ export const detectVerses = createServerFn({ method: "POST" })
     z.object({
       text: z.string().min(2).max(4000),
       translation: z.string().default("KJV"),
+      apibible_key: z.string().optional(),
     }),
   )
   .handler(async ({ data }) => {
@@ -87,30 +187,20 @@ export const detectVerses = createServerFn({ method: "POST" })
     const model = gateway("google/gemini-3-flash-preview");
 
     const systemPrompt = `You are WordFlow, a Bible reference detector for live sermons.
-Analyze the sermon text and surface every Bible passage the preacher is referencing — whether they CITE it, ALLUDE to it, or QUOTE it (even partially or paraphrased).
+Analyze the provided sermon text and extract every Bible reference the preacher is making.
 
-Detect FOUR kinds of references:
-1. EXPLICIT: "John 3:16", "Romans chapter 8 verse 28", "First Corinthians 13 verses 4 through 7", "the 23rd Psalm".
-2. IMPLIED / BOOK MENTION: "Turn to Ephesians", "Paul writes to the Philippians" — chapter unknown, return chapter 1 and verse_start 0.
-3. QUOTATION: Recognizable Bible text spoken WITHOUT a reference. Examples:
-   - "For God so loved the world that he gave his only begotten Son" → John 3:16
-   - "The Lord is my shepherd, I shall not want" → Psalm 23:1
-   - "I can do all things through Christ" → Philippians 4:13
-   - "In the beginning God created the heavens and the earth" → Genesis 1:1
-   - "All things work together for good" → Romans 8:28
-   - "Faith is the substance of things hoped for" → Hebrews 11:1
-4. PARAPHRASE: A clearly recognizable rewording of a specific verse. Only match if you are confident which exact verse it maps to.
+Detect THREE kinds of references:
+1. EXPLICIT: "John 3:16", "Romans chapter 8 verse 28", "First Corinthians 13:4-7".
+2. IMPLIED: "Turn to the book of Ephesians", "Paul writes to the Philippians" (chapter unknown — return chapter 1, verses null).
+3. QUOTATION: Well-known verse text quoted without a reference (e.g. "For God so loved the world..." → John 3:16).
 
 Rules:
-- Be GENEROUS with QUOTATION detection — even 5-8 distinctive words from a famous verse should be caught.
-- Be CONSERVATIVE with PARAPHRASE — only when the wording maps to one specific verse.
-- Prioritize the MOST RECENT references in the text (end of input = what the preacher just said).
-- Normalize book names ("Revelations" → "Revelation", "1st John" → "1 John", "Psalms 23" → "Psalm 23", "Saint John" → "John").
-- Set detection_method honestly: explicit / implied / quotation. Use "quotation" for paraphrases too.
-- Set confidence honestly (high = certain, medium = likely, low = guess — skip lows unless explicit).
-- Return AT MOST the 3 most recent / most clearly cited references, newest last.
+- Normalize book names ("Revelations" → "Revelation", "1st John" → "1 John", "Psalms 23" → "Psalm 23").
+- Only return references you are reasonably sure of. Skip vague mentions.
+- Set detection_method accurately and confidence honestly.
+- Return AT MOST the 3 most recent / most clearly cited references.
 - If no Bible reference is present, return an empty array.
-- NEVER invent a verse. If unsure of the exact verse but sure of the book/chapter, return verse_start 0.`;
+- Never fabricate or invent verses.`;
 
     let detection: z.infer<typeof DetectionSchema>;
     try {
@@ -119,7 +209,6 @@ Rules:
         system: systemPrompt,
         prompt: `Sermon text:\n"""${data.text}"""`,
         schema: DetectionSchema,
-        
       });
       detection = result.object;
     } catch (err) {
@@ -133,7 +222,6 @@ Rules:
     const resolved: ResolvedVerse[] = await Promise.all(
       refs.map(async (r) => {
         if (!r.verse_start || r.verse_start <= 0) {
-          // Implied — no specific verses, skip text fetch
           return {
             ...r,
             verse_start: null,
@@ -144,16 +232,19 @@ Rules:
           };
         }
 
-        const lookupRef =
-          r.verse_end && r.verse_end !== r.verse_start
-            ? `${r.book} ${r.chapter}:${r.verse_start}-${r.verse_end}`
-            : `${r.book} ${r.chapter}:${r.verse_start}`;
+        const verseEnd = r.verse_end && r.verse_end !== r.verse_start ? r.verse_end : null;
         const { text, usedTranslation, error } = await fetchVerseText(
-          lookupRef,
+          r.book,
+          r.chapter,
+          r.verse_start,
+          verseEnd,
           data.translation,
+          data.apibible_key,
         );
         return {
           ...r,
+          verse_start: r.verse_start,
+          verse_end: verseEnd,
           text,
           translation: usedTranslation,
           fetched: text != null,

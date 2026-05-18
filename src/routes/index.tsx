@@ -1,12 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
+import { toast } from "sonner";
 import { detectVerses, type ResolvedVerse } from "@/lib/bible.functions";
-import {
-  broadcastVerse,
-  useActiveVerse,
-  useSettings,
-} from "@/lib/store";
+import { broadcastVerse, useActiveVerse, useSettings } from "@/lib/store";
+import { useSpeechRecognition } from "@/hooks/use-speech-recognition";
 import { VerseSlide } from "@/components/VerseSlide";
 import { SettingsPanel } from "@/components/SettingsPanel";
 import { Button } from "@/components/ui/button";
@@ -18,8 +16,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-import { Settings, Sparkles, Radio, ExternalLink, X, Mic, MicOff } from "lucide-react";
-import { useSpeech } from "@/lib/use-speech";
+import { Settings, Sparkles, Radio, ExternalLink, X, Mic, MicOff, AlertTriangle } from "lucide-react";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -41,51 +38,63 @@ function OperatorConsole() {
   const detect = useServerFn(detectVerses);
 
   const [sermon, setSermon] = useState("");
-  const [interim, setInterim] = useState("");
   const [results, setResults] = useState<ResolvedVerse[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [autoDetect, setAutoDetect] = useState(true);
   const lastQueryRef = useRef("");
+  const lastAutoRef = useRef("");
   const debounceRef = useRef<number | null>(null);
 
-  const handleFinalChunk = useCallback((chunk: string) => {
-    setSermon((prev) => {
-      const sep = prev && !prev.endsWith(" ") ? " " : "";
-      return (prev + sep + chunk.trim()).trim();
+  const { interimTranscript, isListening, supported: micSupported, start: startMic, stop: stopMic } =
+    useSpeechRecognition({
+      onFinalResult: (text) =>
+        setSermon((prev) => prev + (prev.length > 0 && !prev.endsWith(" ") ? " " : "") + text),
     });
-    setInterim("");
-  }, []);
-
-  const speech = useSpeech({
-    onFinalChunk: handleFinalChunk,
-    onInterim: setInterim,
-  });
 
   const runDetect = useCallback(
     async (text: string) => {
-      // Focus on the most recent ~700 chars so live detection tracks what
-      // the pastor JUST said, not what was said five minutes ago.
-      const window = text.length > 700 ? text.slice(-700) : text;
-      const trimmed = window.trim();
-      if (trimmed.length < 8) return;
-      if (trimmed === lastQueryRef.current) return;
-      lastQueryRef.current = trimmed;
+      if (text.trim().length < 8) return;
+      if (text === lastQueryRef.current) return;
+      lastQueryRef.current = text;
       setLoading(true);
       setError(null);
       try {
         const res = await detect({
-          data: { text: trimmed, translation: settings.translation },
+          data: {
+            text,
+            translation: settings.translation,
+            apibible_key: settings.apibible_key || undefined,
+          },
         });
         if (res.error) setError(res.error);
         setResults(res.references);
+
+        // Auto-display: find first high-confidence verse with text
+        const autoVerse = res.references.find(
+          (r) => r.confidence === "high" && r.text,
+        );
+        if (autoVerse && autoVerse.reference !== lastAutoRef.current) {
+          lastAutoRef.current = autoVerse.reference;
+          broadcastVerse({
+            reference: autoVerse.reference,
+            text: autoVerse.text,
+            translation: autoVerse.translation,
+            visible: true,
+            ts: Date.now(),
+          });
+          toast.success(`Auto-displaying: ${autoVerse.reference}`, {
+            description: autoVerse.translation,
+            duration: 3000,
+          });
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : "Detection failed");
       } finally {
         setLoading(false);
       }
     },
-    [detect, settings.translation],
+    [detect, settings.translation, settings.apibible_key],
   );
 
   useEffect(() => {
@@ -100,6 +109,7 @@ function OperatorConsole() {
   }, [sermon, autoDetect, runDetect]);
 
   const sendToScreen = (r: ResolvedVerse) => {
+    lastAutoRef.current = r.reference;
     broadcastVerse({
       reference: r.reference,
       text: r.text,
@@ -135,17 +145,6 @@ function OperatorConsole() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {speech.supported && (
-            <Button
-              size="sm"
-              variant={speech.listening ? "default" : "outline"}
-              onClick={() => (speech.listening ? speech.stop() : speech.start())}
-              className={`gap-2 ${speech.listening ? "bg-gold text-background hover:bg-gold/90" : ""}`}
-            >
-              {speech.listening ? <Mic className="h-4 w-4 animate-pulse" /> : <MicOff className="h-4 w-4" />}
-              {speech.listening ? "Listening…" : "Start mic"}
-            </Button>
-          )}
           <a
             href="/display"
             target="_blank"
@@ -163,9 +162,7 @@ function OperatorConsole() {
             </SheetTrigger>
             <SheetContent className="w-[420px] overflow-y-auto sm:max-w-[420px]">
               <SheetHeader>
-                <SheetTitle className="font-display">
-                  Church branding
-                </SheetTitle>
+                <SheetTitle className="font-display">Church branding</SheetTitle>
               </SheetHeader>
               <div className="mt-4">
                 <SettingsPanel settings={settings} update={update} />
@@ -179,67 +176,126 @@ function OperatorConsole() {
         {/* Left column: sermon input + detections */}
         <section className="space-y-5">
           <div>
-            <div className="mb-2 flex items-center justify-between">
-              <Label>Sermon transcript</Label>
-              <label className="text-muted-foreground flex items-center gap-2 text-xs">
-                <input
-                  type="checkbox"
-                  checked={autoDetect}
-                  onChange={(e) => setAutoDetect(e.target.checked)}
-                  className="accent-[var(--gold)]"
-                />
-                Auto-detect as you type
-              </label>
+            <div className="mb-2 flex items-center justify-between gap-2 flex-wrap">
+              <SectionLabel>Sermon input</SectionLabel>
+              <div className="flex items-center gap-3">
+                <label className="text-muted-foreground flex items-center gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={autoDetect}
+                    onChange={(e) => setAutoDetect(e.target.checked)}
+                    className="accent-[var(--gold)]"
+                  />
+                  Auto-detect
+                </label>
+
+                {/* Mic button */}
+                {micSupported ? (
+                  <button
+                    onClick={isListening ? stopMic : startMic}
+                    title={isListening ? "Stop microphone" : "Start microphone"}
+                    className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-all ${
+                      isListening
+                        ? "border-red-500 bg-red-500/10 text-red-400"
+                        : "border-border text-muted-foreground hover:border-gold/60 hover:text-foreground"
+                    }`}
+                  >
+                    {isListening ? (
+                      <>
+                        <span className="relative flex h-2 w-2">
+                          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
+                          <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500" />
+                        </span>
+                        <MicOff className="h-3.5 w-3.5" />
+                        Live
+                      </>
+                    ) : (
+                      <>
+                        <Mic className="h-3.5 w-3.5" />
+                        Mic
+                      </>
+                    )}
+                  </button>
+                ) : (
+                  <span
+                    title="Speech recognition requires Chrome or Edge"
+                    className="text-muted-foreground flex items-center gap-1 text-xs opacity-50"
+                  >
+                    <AlertTriangle className="h-3.5 w-3.5" />
+                    Mic unavailable
+                  </span>
+                )}
+              </div>
             </div>
-            <Textarea
-              value={sermon}
-              onChange={(e) => setSermon(e.target.value)}
-              placeholder='Click "Start mic" above, or type / paste — e.g. "Turn with me to John chapter 3 verse 16, for God so loved the world…"'
-              className="min-h-[220px] resize-none text-base leading-relaxed"
-            />
-            {interim && (
-              <p className="text-gold/80 mt-2 text-sm italic">
-                <Mic className="mr-1 inline h-3 w-3 animate-pulse" />
-                {interim}
-              </p>
-            )}
-            {!speech.supported && (
-              <p className="mt-2 text-xs text-amber-300/80">
-                ⚠ Live mic needs Chrome, Edge, or Safari. Firefox doesn't support the Web Speech API.
-              </p>
-            )}
-            {speech.error && (
-              <p className="mt-2 text-xs text-rose-300/90">
-                Mic: {speech.error === "not-allowed"
-                  ? "permission denied — allow microphone access in your browser."
-                  : speech.error}
-              </p>
-            )}
+
+            {/* Textarea + interim overlay */}
+            <div className="relative">
+              <Textarea
+                value={sermon}
+                onChange={(e) => setSermon(e.target.value)}
+                placeholder={
+                  isListening
+                    ? "Listening… speak naturally and verse references will be detected automatically."
+                    : 'Paste live captions, or type naturally — e.g. "Turn with me to John chapter 3 verse 16…"'
+                }
+                className="min-h-[220px] resize-none text-base leading-relaxed"
+              />
+              {/* Show in-progress words while listening */}
+              {interimTranscript && (
+                <div className="pointer-events-none absolute bottom-3 left-3 right-3 text-sm italic text-muted-foreground/60 leading-relaxed">
+                  {interimTranscript}
+                </div>
+              )}
+            </div>
+
             <div className="mt-2 flex items-center justify-between">
               <p className="text-muted-foreground text-xs">
                 {loading
                   ? "Detecting references…"
                   : error
                     ? `⚠ ${error}`
-                    : `${sermon.length} chars · ${speech.listening ? "live mic on" : "powered by Lovable AI"}`}
+                    : isListening
+                      ? `Mic on · ${sermon.length} chars`
+                      : `${sermon.length} chars · powered by WordFlow AI`}
               </p>
-              <Button
-                size="sm"
-                disabled={loading || sermon.trim().length < 8}
-                onClick={() => {
-                  lastQueryRef.current = "";
-                  runDetect(sermon);
-                }}
-              >
-                Detect now
-              </Button>
+              <div className="flex gap-2">
+                {sermon.length > 0 && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setSermon("");
+                      setResults([]);
+                      lastQueryRef.current = "";
+                      lastAutoRef.current = "";
+                    }}
+                  >
+                    Clear
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  disabled={loading || sermon.trim().length < 8}
+                  onClick={() => {
+                    lastQueryRef.current = "";
+                    runDetect(sermon);
+                  }}
+                >
+                  Detect now
+                </Button>
+              </div>
             </div>
           </div>
 
           <div className="space-y-3">
-            <Label>Detected references</Label>
+            <div className="flex items-center justify-between">
+              <SectionLabel>Detected references</SectionLabel>
+              <span className="text-muted-foreground text-[10px] uppercase tracking-widest">
+                High confidence = auto-display · medium/low = manual
+              </span>
+            </div>
             {results.length === 0 ? (
-              <EmptyState />
+              <EmptyState isListening={isListening} />
             ) : (
               results.map((r, i) => (
                 <DetectedCard
@@ -256,7 +312,7 @@ function OperatorConsole() {
         {/* Right column: live preview */}
         <section className="space-y-3">
           <div className="flex items-center justify-between">
-            <Label>Live screen preview</Label>
+            <SectionLabel>Live screen preview</SectionLabel>
             <div className="flex items-center gap-2">
               <span
                 className={`flex items-center gap-1.5 text-xs ${liveVerse.visible ? "text-gold" : "text-muted-foreground"}`}
@@ -290,7 +346,7 @@ function OperatorConsole() {
   );
 }
 
-function Label({ children }: { children: React.ReactNode }) {
+function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
     <span className="text-xs font-semibold tracking-[0.2em] uppercase text-muted-foreground">
       {children}
@@ -298,10 +354,12 @@ function Label({ children }: { children: React.ReactNode }) {
   );
 }
 
-function EmptyState() {
+function EmptyState({ isListening }: { isListening: boolean }) {
   return (
     <div className="border-border/60 text-muted-foreground rounded-xl border border-dashed p-8 text-center text-sm">
-      Start typing a sermon — references will surface here in under a second.
+      {isListening
+        ? "Listening for Bible references… keep preaching!"
+        : "Start typing or turn on the mic — references will surface here in under a second."}
     </div>
   );
 }
@@ -321,10 +379,15 @@ function DetectedCard({
       : verse.confidence === "medium"
         ? "text-amber-300"
         : "text-rose-300";
+
+  const isAutoDisplayed = verse.confidence === "high" && verse.text;
+
   return (
     <div
       className={`bg-card group rounded-xl border p-4 transition-all ${
-        active ? "border-gold shadow-[0_0_0_2px_var(--gold)]" : "border-border hover:border-gold/40"
+        active
+          ? "border-gold shadow-[0_0_0_2px_var(--gold)]"
+          : "border-border hover:border-gold/40"
       }`}
     >
       <div className="mb-2 flex items-start justify-between gap-3">
@@ -332,12 +395,18 @@ function DetectedCard({
           <div className="font-display text-gold text-lg leading-tight">
             {verse.reference}
           </div>
-          <div className="text-muted-foreground mt-0.5 flex items-center gap-2 text-[10px] uppercase tracking-widest">
+          <div className="text-muted-foreground mt-0.5 flex items-center gap-2 text-[10px] uppercase tracking-widest flex-wrap">
             <span>{verse.translation}</span>
             <span>·</span>
             <span>{verse.detection_method}</span>
             <span>·</span>
             <span className={confColor}>{verse.confidence}</span>
+            {isAutoDisplayed && (
+              <>
+                <span>·</span>
+                <span className="text-emerald-300">auto-display</span>
+              </>
+            )}
           </div>
         </div>
         <Button
@@ -353,7 +422,7 @@ function DetectedCard({
         {verse.text ?? (
           <span className="italic opacity-70">
             {verse.error
-              ? `Couldn't fetch verse text (${verse.error}). Try another translation.`
+              ? `Couldn't fetch verse text (${verse.error}).`
               : "Reference detected — pick a specific verse to display text."}
           </span>
         )}

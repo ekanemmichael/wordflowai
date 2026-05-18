@@ -35,6 +35,8 @@ export type ChurchSettings = {
   // translation
   translation: string;
   red_letter_mode: boolean;
+  // API keys
+  apibible_key: string;
 };
 
 export const DEFAULT_SETTINGS: ChurchSettings = {
@@ -64,6 +66,7 @@ export const DEFAULT_SETTINGS: ChurchSettings = {
   show_powered_by: true,
   translation: "KJV",
   red_letter_mode: true,
+  apibible_key: "",
 };
 
 const SETTINGS_KEY = "wordflow:settings";
