@@ -18,6 +18,22 @@ import {
 } from "@/components/ui/sheet";
 import { Settings, Sparkles, Radio, ExternalLink, X, Mic, MicOff, AlertTriangle } from "lucide-react";
 
+const TRANSLATION_PATTERNS: { regex: RegExp; code: string }[] = [
+  { regex: /\bNIV\b|\bnew international\b/i, code: "NIV" },
+  { regex: /\bESV\b|\benglish standard\b/i, code: "ESV" },
+  { regex: /\bNLT\b|\bnew living\b/i, code: "NLT" },
+  { regex: /\bNKJV\b|\bnew king james\b/i, code: "NKJV" },
+  { regex: /\bKJV\b|\bking james\b/i, code: "KJV" },
+  { regex: /\bWEB\b|\bworld english\b/i, code: "WEB" },
+];
+
+function detectTranslationFromText(text: string): string | null {
+  for (const { regex, code } of TRANSLATION_PATTERNS) {
+    if (regex.test(text)) return code;
+  }
+  return null;
+}
+
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
@@ -57,23 +73,31 @@ function OperatorConsole() {
       if (text.trim().length < 8) return;
       if (text === lastQueryRef.current) return;
       lastQueryRef.current = text;
+
+      // Detect if preacher mentioned a specific translation ("in the NIV", "King James", etc.)
+      const mentionedTranslation = detectTranslationFromText(text);
+      if (mentionedTranslation && mentionedTranslation !== settings.translation) {
+        update({ translation: mentionedTranslation });
+        toast.info(`Translation switched to ${mentionedTranslation}`, { duration: 3000 });
+      }
+      const activeTranslation = mentionedTranslation ?? settings.translation;
+
       setLoading(true);
       setError(null);
       try {
         const res = await detect({
           data: {
             text,
-            translation: settings.translation,
+            translation: activeTranslation,
             apibible_key: settings.apibible_key || undefined,
           },
         });
         if (res.error) setError(res.error);
         setResults(res.references);
 
-        // Auto-display: find first high-confidence verse with text
-        const autoVerse = res.references.find(
-          (r) => r.confidence === "high" && r.text,
-        );
+        // Auto-display: any high-confidence reference — even if verse text fetch failed
+        // (VerseSlide shows "Looking up verse…" when text is null)
+        const autoVerse = res.references.find((r) => r.confidence === "high");
         if (autoVerse && autoVerse.reference !== lastAutoRef.current) {
           lastAutoRef.current = autoVerse.reference;
           broadcastVerse({
@@ -83,7 +107,7 @@ function OperatorConsole() {
             visible: true,
             ts: Date.now(),
           });
-          toast.success(`Auto-displaying: ${autoVerse.reference}`, {
+          toast.success(`Displaying: ${autoVerse.reference}`, {
             description: autoVerse.translation,
             duration: 3000,
           });
@@ -94,7 +118,7 @@ function OperatorConsole() {
         setLoading(false);
       }
     },
-    [detect, settings.translation, settings.apibible_key],
+    [detect, settings.translation, settings.apibible_key, update],
   );
 
   useEffect(() => {
