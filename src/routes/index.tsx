@@ -84,11 +84,7 @@ function OperatorConsole() {
       setError(null);
       try {
         const res = await detect({
-          data: {
-            text,
-            translation: activeTranslation,
-            apibible_key: settings.apibible_key || undefined,
-          },
+          data: { text, translation: activeTranslation },
         });
         if (res.error) setError(res.error);
         setResults(res.references);
@@ -115,7 +111,7 @@ function OperatorConsole() {
         setLoading(false);
       }
     },
-    [detect, settings.translation, settings.apibible_key, update],
+    [detect, settings.translation, update],
   );
 
   // Debounced auto-detect on transcript change

@@ -257,28 +257,8 @@ export function SettingsPanel({ settings: s, update }: Props) {
           </Select>
         </Field>
         <p className="text-xs text-muted-foreground">
-          KJV and WEB work out of the box. NIV, ESV, NLT, and NKJV need a free
-          API.Bible key below.
-        </p>
-        <Field label="API.Bible key (for NIV / ESV / NLT / NKJV)">
-          <Input
-            type="password"
-            placeholder="Paste your API.Bible key…"
-            value={s.apibible_key}
-            onChange={(e) => update({ apibible_key: e.target.value })}
-          />
-        </Field>
-        <p className="text-xs text-muted-foreground">
-          Get a free key at{" "}
-          <a
-            href="https://scripture.api.bible"
-            target="_blank"
-            rel="noreferrer"
-            className="underline opacity-70 hover:opacity-100"
-          >
-            scripture.api.bible
-          </a>{" "}
-          — free tier allows 5,000 requests / day.
+          KJV and WEB are always available. NIV, ESV, NLT, and NKJV are
+          supported when configured by your administrator.
         </p>
       </Section>
     </div>

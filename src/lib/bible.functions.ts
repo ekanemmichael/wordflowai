@@ -291,11 +291,12 @@ export const detectVerses = createServerFn({ method: "POST" })
     z.object({
       text: z.string().min(2).max(4000),
       translation: z.string().default("KJV"),
-      apibible_key: z.string().optional(),
     }),
   )
   .handler(async ({ data }) => {
     const aiKey = process.env.LOVABLE_API_KEY;
+    // API.Bible key is stored server-side only — never exposed to the client
+    const apiBibleKey = process.env.APIBIBLE_KEY;
 
     // ── No AI key: use regex detection for explicit references ──
     if (!aiKey) {
@@ -303,7 +304,7 @@ export const detectVerses = createServerFn({ method: "POST" })
       if (refs.length === 0) {
         return { references: [] as ResolvedVerse[], error: null, mode: "regex" };
       }
-      const resolved = await resolveDetections(refs, data.translation, data.apibible_key);
+      const resolved = await resolveDetections(refs, data.translation, apiBibleKey);
       return { references: resolved, error: null, mode: "regex" };
     }
 
@@ -329,12 +330,12 @@ Rules:
     try {
       const result = await generateObject({ model, system: systemPrompt, prompt: `Sermon:\n"""${data.text}"""`, schema: DetectionSchema });
       const refs = result.object.references.slice(0, 3);
-      const resolved = await resolveDetections(refs, data.translation, data.apibible_key);
+      const resolved = await resolveDetections(refs, data.translation, apiBibleKey);
       return { references: resolved, error: null, mode: "ai" };
     } catch (err) {
       // AI failed — fall back to regex so the display never goes dark
       const refs = detectExplicitRefs(data.text);
-      const resolved = await resolveDetections(refs, data.translation, data.apibible_key);
+      const resolved = await resolveDetections(refs, data.translation, apiBibleKey);
       return {
         references: resolved,
         error: err instanceof Error ? err.message : "AI detection failed — using regex fallback",
