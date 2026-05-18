@@ -18,7 +18,8 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-import { Settings, Sparkles, Radio, ExternalLink, X } from "lucide-react";
+import { Settings, Sparkles, Radio, ExternalLink, X, Mic, MicOff } from "lucide-react";
+import { useSpeech } from "@/lib/use-speech";
 
 export const Route = createFileRoute("/")({
   head: () => ({
