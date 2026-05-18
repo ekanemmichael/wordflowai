@@ -41,12 +41,26 @@ function OperatorConsole() {
   const detect = useServerFn(detectVerses);
 
   const [sermon, setSermon] = useState("");
+  const [interim, setInterim] = useState("");
   const [results, setResults] = useState<ResolvedVerse[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [autoDetect, setAutoDetect] = useState(true);
   const lastQueryRef = useRef("");
   const debounceRef = useRef<number | null>(null);
+
+  const handleFinalChunk = useCallback((chunk: string) => {
+    setSermon((prev) => {
+      const sep = prev && !prev.endsWith(" ") ? " " : "";
+      return (prev + sep + chunk.trim()).trim();
+    });
+    setInterim("");
+  }, []);
+
+  const speech = useSpeech({
+    onFinalChunk: handleFinalChunk,
+    onInterim: setInterim,
+  });
 
   const runDetect = useCallback(
     async (text: string) => {
