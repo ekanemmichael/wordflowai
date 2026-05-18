@@ -31,7 +31,6 @@ export type ResolvedVerse = Omit<Detection, "verse_start" | "verse_end"> & {
 // ─── Book name aliases ────────────────────────────────────────────────────────
 
 const BOOK_ALIASES: Record<string, string> = {
-  // OT
   gen: "Genesis", genesis: "Genesis",
   exo: "Exodus", exod: "Exodus", exodus: "Exodus",
   lev: "Leviticus", leviticus: "Leviticus",
@@ -72,7 +71,6 @@ const BOOK_ALIASES: Record<string, string> = {
   hag: "Haggai", haggai: "Haggai",
   zec: "Zechariah", zech: "Zechariah", zechariah: "Zechariah",
   mal: "Malachi", malachi: "Malachi",
-  // NT
   mat: "Matthew", matt: "Matthew", matthew: "Matthew",
   mrk: "Mark", mark: "Mark",
   luk: "Luke", luke: "Luke",
@@ -108,38 +106,20 @@ function lookupBook(raw: string): string | null {
 
 function normalizeOrdinals(text: string): string {
   return text
-    .replace(/\bfirst\b/gi, "1")
-    .replace(/\bsecond\b/gi, "2")
-    .replace(/\bthird\b/gi, "3")
-    .replace(/\b1st\b/gi, "1")
-    .replace(/\b2nd\b/gi, "2")
-    .replace(/\b3rd\b/gi, "3");
+    .replace(/\bfirst\b/gi, "1").replace(/\bsecond\b/gi, "2").replace(/\bthird\b/gi, "3")
+    .replace(/\b1st\b/gi, "1").replace(/\b2nd\b/gi, "2").replace(/\b3rd\b/gi, "3");
 }
 
 function dedup(refs: Detection[]): Detection[] {
   const seen = new Set<string>();
-  return refs.filter((r) => {
-    if (seen.has(r.reference)) return false;
-    seen.add(r.reference);
-    return true;
-  });
+  return refs.filter((r) => { if (seen.has(r.reference)) return false; seen.add(r.reference); return true; });
 }
-
-// ─── Regex-based explicit reference detector ──────────────────────────────────
-// Used as primary detector (or fallback when no AI key is set)
 
 function detectExplicitRefs(text: string): Detection[] {
   const t = normalizeOrdinals(text);
   const results: Detection[] = [];
-
-  // Pattern 1: "Book Ch:V" or "Book Ch:V-V"  e.g. "John 3:16", "1 Cor 13:4-7"
-  const shortRef =
-    /\b((?:[123]\s+)?[A-Za-z]+(?:\s+of\s+[A-Za-z]+)?)\s+(\d+):(\d+)(?:\s*[-–]\s*(\d+))?\b/g;
-
-  // Pattern 2: "Book chapter X verse Y" / "Book chapter X verses Y-Z"
-  const verboseRef =
-    /\b((?:[123]\s+)?[A-Za-z]+)\s+chapter\s+(\d+)[,\s]+verses?\s+(\d+)(?:\s*(?:through|to|-|–)\s*(\d+))?\b/gi;
-
+  const shortRef = /\b((?:[123]\s+)?[A-Za-z]+(?:\s+of\s+[A-Za-z]+)?)\s+(\d+):(\d+)(?:\s*[-–]\s*(\d+))?\b/g;
+  const verboseRef = /\b((?:[123]\s+)?[A-Za-z]+)\s+chapter\s+(\d+)[,\s]+verses?\s+(\d+)(?:\s*(?:through|to|-|–)\s*(\d+))?\b/gi;
   for (const pattern of [shortRef, verboseRef]) {
     for (const m of t.matchAll(pattern)) {
       const book = lookupBook(m[1]);
@@ -149,16 +129,11 @@ function detectExplicitRefs(text: string): Detection[] {
       const ve = m[4] ? parseInt(m[4]) : 0;
       results.push({
         reference: ve ? `${book} ${chapter}:${vs}-${ve}` : `${book} ${chapter}:${vs}`,
-        book,
-        chapter,
-        verse_start: vs,
-        verse_end: ve,
-        detection_method: "explicit",
-        confidence: "high",
+        book, chapter, verse_start: vs, verse_end: ve,
+        detection_method: "explicit", confidence: "high",
       });
     }
   }
-
   return dedup(results).slice(0, 3);
 }
 
@@ -198,28 +173,37 @@ const BOOK_CODES: Record<string, string> = {
   Jude: "JUD", Revelation: "REV",
 };
 
-async function fetchViaBibleApi(
-  reference: string,
-  translation: string,
-): Promise<{ text: string | null; usedTranslation: string; error?: string }> {
-  const tparam = translation.toLowerCase();
-  const url = `https://bible-api.com/${encodeURIComponent(reference)}?translation=${tparam}`;
+// In-memory cache: survives the lifetime of a worker instance
+const verseCache = new Map<string, { text: string; translation: string }>();
+
+async function fetchViaBibleApi(reference: string, translation: string) {
+  const cacheKey = `free:${translation}:${reference}`;
+  const cached = verseCache.get(cacheKey);
+  if (cached) return { text: cached.text, usedTranslation: cached.translation };
+
+  const url = `https://bible-api.com/${encodeURIComponent(reference)}?translation=${translation.toLowerCase()}`;
   try {
     const res = await fetch(url);
-    if (!res.ok) return { text: null, usedTranslation: tparam.toUpperCase(), error: `Lookup failed (${res.status})` };
+    if (!res.ok) return { text: null, usedTranslation: translation.toUpperCase(), error: `Lookup failed (${res.status})` };
     const json = (await res.json()) as { text?: string; error?: string };
-    if (json.error || !json.text) return { text: null, usedTranslation: tparam.toUpperCase(), error: json.error ?? "No text" };
-    return { text: json.text.trim().replace(/\s+/g, " "), usedTranslation: tparam.toUpperCase() };
+    if (json.error || !json.text) return { text: null, usedTranslation: translation.toUpperCase(), error: json.error ?? "No text" };
+    const text = json.text.trim().replace(/\s+/g, " ");
+    verseCache.set(cacheKey, { text, translation: translation.toUpperCase() });
+    return { text, usedTranslation: translation.toUpperCase() };
   } catch (err) {
-    return { text: null, usedTranslation: tparam.toUpperCase(), error: err instanceof Error ? err.message : "Network error" };
+    return { text: null, usedTranslation: translation.toUpperCase(), error: err instanceof Error ? err.message : "Network error" };
   }
 }
 
 async function fetchViaApiBible(
   book: string, chapter: number, verseStart: number, verseEnd: number | null,
   translation: string, apiKey: string,
-): Promise<{ text: string | null; usedTranslation: string; error?: string }> {
+) {
   const upper = translation.toUpperCase();
+  const cacheKey = `apibible:${upper}:${book}${chapter}:${verseStart}-${verseEnd}`;
+  const cached = verseCache.get(cacheKey);
+  if (cached) return { text: cached.text, usedTranslation: cached.translation };
+
   const bibleId = APIBIBLE_IDS[upper];
   if (!bibleId) return { text: null, usedTranslation: upper, error: `Translation ${upper} not configured` };
   const bookCode = BOOK_CODES[book];
@@ -237,6 +221,7 @@ async function fetchViaApiBible(
     const json = (await res.json()) as { data?: { content?: string } };
     const text = (json.data?.content ?? "").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
     if (!text) return { text: null, usedTranslation: upper, error: "Empty response" };
+    verseCache.set(cacheKey, { text, translation: upper });
     return { text, usedTranslation: upper };
   } catch (err) {
     return { text: null, usedTranslation: upper, error: err instanceof Error ? err.message : "Network error" };
@@ -246,99 +231,80 @@ async function fetchViaApiBible(
 async function fetchVerseText(
   book: string, chapter: number, verseStart: number, verseEnd: number | null,
   translation: string, apibibleKey?: string,
-): Promise<{ text: string | null; usedTranslation: string; error?: string }> {
+) {
   const lower = translation.toLowerCase();
   if (BIBLE_API_FREE.has(lower)) {
-    const ref = verseEnd && verseEnd !== verseStart
-      ? `${book} ${chapter}:${verseStart}-${verseEnd}`
-      : `${book} ${chapter}:${verseStart}`;
+    const ref = verseEnd ? `${book} ${chapter}:${verseStart}-${verseEnd}` : `${book} ${chapter}:${verseStart}`;
     return fetchViaBibleApi(ref, translation);
   }
-  if (apibibleKey) {
-    return fetchViaApiBible(book, chapter, verseStart, verseEnd, translation, apibibleKey);
-  }
+  if (apibibleKey) return fetchViaApiBible(book, chapter, verseStart, verseEnd, translation, apibibleKey);
   // No key for premium translation — fall back to KJV
-  const ref = verseEnd && verseEnd !== verseStart
-    ? `${book} ${chapter}:${verseStart}-${verseEnd}`
-    : `${book} ${chapter}:${verseStart}`;
+  const ref = verseEnd ? `${book} ${chapter}:${verseStart}-${verseEnd}` : `${book} ${chapter}:${verseStart}`;
   const result = await fetchViaBibleApi(ref, "kjv");
   return { ...result, usedTranslation: "KJV" };
 }
 
-async function resolveDetections(
-  refs: Detection[],
-  translation: string,
-  apibibleKey?: string,
-): Promise<ResolvedVerse[]> {
-  return Promise.all(
-    refs.map(async (r) => {
-      if (!r.verse_start || r.verse_start <= 0) {
-        return { ...r, verse_start: null, verse_end: null, text: null, translation, fetched: false };
-      }
-      const verseEnd = r.verse_end && r.verse_end !== r.verse_start ? r.verse_end : null;
-      const { text, usedTranslation, error } = await fetchVerseText(
-        r.book, r.chapter, r.verse_start, verseEnd, translation, apibibleKey,
-      );
-      return { ...r, verse_start: r.verse_start, verse_end: verseEnd, text, translation: usedTranslation, fetched: text != null, error };
-    }),
-  );
+async function resolveDetections(refs: Detection[], translation: string, apibibleKey?: string): Promise<ResolvedVerse[]> {
+  return Promise.all(refs.map(async (r) => {
+    if (!r.verse_start || r.verse_start <= 0) {
+      return { ...r, verse_start: null, verse_end: null, text: null, translation, fetched: false };
+    }
+    const verseEnd = r.verse_end && r.verse_end !== r.verse_start ? r.verse_end : null;
+    const { text, usedTranslation, error } = await fetchVerseText(r.book, r.chapter, r.verse_start, verseEnd, translation, apibibleKey);
+    return { ...r, verse_start: r.verse_start, verse_end: verseEnd, text, translation: usedTranslation, fetched: text != null, error };
+  }));
 }
 
-// ─── Server function ──────────────────────────────────────────────────────────
+// ─── Fast path: regex detection only, no AI ───────────────────────────────────
+// Called on every interim transcript update for near-instant display
+
+export const fastDetect = createServerFn({ method: "POST" })
+  .inputValidator(z.object({
+    text: z.string().min(2).max(2000),
+    translation: z.string().default("KJV"),
+  }))
+  .handler(async ({ data }) => {
+    const apiBibleKey = process.env.APIBIBLE_KEY ?? "zSVRj_oOL2SSZg3s8y415";
+    const refs = detectExplicitRefs(data.text);
+    if (refs.length === 0) return { references: [] as ResolvedVerse[] };
+    const resolved = await resolveDetections(refs, data.translation, apiBibleKey);
+    return { references: resolved };
+  });
+
+// ─── Full AI detection: explicit + implied + quotations ───────────────────────
+// Called on final transcript for deeper detection
 
 export const detectVerses = createServerFn({ method: "POST" })
-  .inputValidator(
-    z.object({
-      text: z.string().min(2).max(4000),
-      translation: z.string().default("KJV"),
-    }),
-  )
+  .inputValidator(z.object({
+    text: z.string().min(2).max(4000),
+    translation: z.string().default("KJV"),
+  }))
   .handler(async ({ data }) => {
     const aiKey = process.env.LOVABLE_API_KEY;
     const apiBibleKey = process.env.APIBIBLE_KEY ?? "zSVRj_oOL2SSZg3s8y415";
 
-    // ── No AI key: use regex detection for explicit references ──
     if (!aiKey) {
       const refs = detectExplicitRefs(data.text);
-      if (refs.length === 0) {
-        return { references: [] as ResolvedVerse[], error: null, mode: "regex" };
-      }
+      if (refs.length === 0) return { references: [] as ResolvedVerse[], error: null };
       const resolved = await resolveDetections(refs, data.translation, apiBibleKey);
-      return { references: resolved, error: null, mode: "regex" };
+      return { references: resolved, error: null };
     }
 
-    // ── AI key present: use Gemini for full detection (explicit + implied + quotations) ──
     const gateway = createLovableAiGatewayProvider(aiKey);
     const model = gateway("google/gemini-3-flash-preview");
 
-    const systemPrompt = `You are WordFlow, a Bible reference detector for live sermons.
-Analyze the sermon text and extract every Bible reference the preacher is making.
-
-Detect THREE kinds:
-1. EXPLICIT: "John 3:16", "Romans chapter 8 verse 28", "First Corinthians 13:4-7"
-2. IMPLIED: "Turn to Ephesians", "Paul writes to the Philippians" (use chapter 1, verse 0)
-3. QUOTATION: Well-known text quoted without a reference ("For God so loved the world" → John 3:16)
-
-Rules:
-- Normalize book names ("Revelations" → "Revelation", "Psalms 23" → "Psalm 23")
-- Be conservative — only return references you are sure of
-- Return AT MOST 3 most recent / clearly cited references
-- If no reference, return empty array
-- Never fabricate verses`;
-
     try {
-      const result = await generateObject({ model, system: systemPrompt, prompt: `Sermon:\n"""${data.text}"""`, schema: DetectionSchema });
-      const refs = result.object.references.slice(0, 3);
-      const resolved = await resolveDetections(refs, data.translation, apiBibleKey);
-      return { references: resolved, error: null, mode: "ai" };
-    } catch (err) {
-      // AI failed — fall back to regex so the display never goes dark
+      const result = await generateObject({
+        model,
+        system: `Bible reference detector for live sermons. Extract references — EXPLICIT ("John 3:16"), IMPLIED ("Turn to Ephesians" → chapter 1 verse 0), QUOTATION ("For God so loved the world" → John 3:16). Normalize names. Return max 3 most recent. Empty array if none. Never fabricate.`,
+        prompt: `"""${data.text}"""`,
+        schema: DetectionSchema,
+      });
+      const resolved = await resolveDetections(result.object.references.slice(0, 3), data.translation, apiBibleKey);
+      return { references: resolved, error: null };
+    } catch {
       const refs = detectExplicitRefs(data.text);
       const resolved = await resolveDetections(refs, data.translation, apiBibleKey);
-      return {
-        references: resolved,
-        error: err instanceof Error ? err.message : "AI detection failed — using regex fallback",
-        mode: "regex-fallback",
-      };
+      return { references: resolved, error: null };
     }
   });

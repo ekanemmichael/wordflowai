@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
-import { detectVerses, type ResolvedVerse } from "@/lib/bible.functions";
+import { fastDetect, detectVerses, type ResolvedVerse } from "@/lib/bible.functions";
 import { broadcastVerse, useActiveVerse, useSettings } from "@/lib/store";
 import { useSpeechRecognition } from "@/hooks/use-speech-recognition";
 import { VerseSlide } from "@/components/VerseSlide";
@@ -15,7 +15,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-import { Settings, Sparkles, ExternalLink, X, Mic, MicOff, Radio, BookOpen } from "lucide-react";
+import { Settings, Sparkles, ExternalLink, X, Mic, MicOff, Radio, BookOpen, AlertTriangle } from "lucide-react";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -46,76 +46,113 @@ function detectTranslation(text: string): string | null {
 function OperatorConsole() {
   const { settings, update } = useSettings();
   const liveVerse = useActiveVerse();
+  const fast = useServerFn(fastDetect);
   const detect = useServerFn(detectVerses);
 
   const [sermon, setSermon] = useState("");
   const [results, setResults] = useState<ResolvedVerse[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const lastQueryRef = useRef("");
-  const lastAutoRef = useRef("");
-  const debounceRef = useRef<number | null>(null);
+  const lastFastRef = useRef("");  // last interim text sent to fastDetect
+  const lastAutoRef = useRef(""); // last reference auto-displayed
+  const lastAIRef = useRef("");   // last final text sent to AI
+  const fastDebounce = useRef<number | null>(null);
+  const aiDebounce = useRef<number | null>(null);
 
-  const { interimTranscript, isListening, supported: micSupported, start: startMic, stop: stopMic } =
+  // ── Auto-display helper ────────────────────────────────────────────────────
+  const autoDisplay = useCallback((refs: ResolvedVerse[], translation?: string) => {
+    const best =
+      refs.find((r) => r.text && r.confidence === "high") ??
+      refs.find((r) => r.text && r.confidence === "medium") ??
+      refs.find((r) => r.text);
+    if (!best || best.reference === lastAutoRef.current) return;
+    lastAutoRef.current = best.reference;
+    broadcastVerse({
+      reference: best.reference,
+      text: best.text,
+      translation: translation ?? best.translation,
+      visible: true,
+      ts: Date.now(),
+    });
+    toast.success(`Now showing: ${best.reference}`, { description: best.translation, duration: 2500 });
+  }, []);
+
+  // ── Tier 1: instant regex on interim transcript ────────────────────────────
+  const runFast = useCallback(async (text: string, translation: string) => {
+    const combined = sermon + " " + text;
+    if (combined.trim().length < 4) return;
+    if (combined === lastFastRef.current) return;
+    lastFastRef.current = combined;
+    try {
+      const res = await fast({ data: { text: combined, translation } });
+      if (res.references.length > 0) {
+        setResults((prev) => {
+          // Merge: add any new refs not already in list
+          const existing = new Set(prev.map((r) => r.reference));
+          const newOnes = res.references.filter((r) => !existing.has(r.reference));
+          return newOnes.length > 0 ? [...newOnes, ...prev].slice(0, 5) : prev;
+        });
+        autoDisplay(res.references, translation);
+      }
+    } catch { /* silent — AI path will cover */ }
+  }, [fast, sermon, autoDisplay]);
+
+  // ── Tier 2: full AI detection on final transcript ──────────────────────────
+  const runAI = useCallback(async (text: string) => {
+    if (text.trim().length < 4) return;
+    if (text === lastAIRef.current) return;
+    lastAIRef.current = text;
+
+    const mentioned = detectTranslation(text);
+    if (mentioned && mentioned !== settings.translation) {
+      update({ translation: mentioned });
+      toast.info(`Translation switched to ${mentioned}`, { duration: 2000 });
+    }
+    const translation = mentioned ?? settings.translation;
+
+    setLoading(true);
+    try {
+      const res = await detect({ data: { text, translation } });
+      if (res.references.length > 0) {
+        setResults(res.references);
+        autoDisplay(res.references, translation);
+      }
+    } catch { /* silent */ } finally {
+      setLoading(false);
+    }
+  }, [detect, settings.translation, update, autoDisplay]);
+
+  // ── Speech recognition ─────────────────────────────────────────────────────
+  const { interimTranscript, isListening, supported: micSupported, micError, start: startMic, stop: stopMic } =
     useSpeechRecognition({
-      onFinalResult: (text) => setSermon((prev) => (prev ? prev + " " + text : text)),
+      onFinalResult: (text) => {
+        const next = sermon ? sermon + " " + text : text;
+        setSermon(next);
+        // Kick AI with debounce after each final sentence
+        if (aiDebounce.current) window.clearTimeout(aiDebounce.current);
+        aiDebounce.current = window.setTimeout(() => runAI(next), 400);
+      },
+      onInterim: (interim) => {
+        // Tier 1: fire immediately on partial speech
+        if (fastDebounce.current) window.clearTimeout(fastDebounce.current);
+        fastDebounce.current = window.setTimeout(() => {
+          runFast(interim, settings.translation);
+        }, 150); // 150ms — near-instant
+      },
     });
 
-  const runDetect = useCallback(
-    async (text: string) => {
-      if (text.trim().length < 4) return;
-      if (text === lastQueryRef.current) return;
-      lastQueryRef.current = text;
-
-      const mentioned = detectTranslation(text);
-      if (mentioned && mentioned !== settings.translation) {
-        update({ translation: mentioned });
-        toast.info(`Translation switched to ${mentioned}`, { duration: 2500 });
-      }
-      const activeTranslation = mentioned ?? settings.translation;
-
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await detect({ data: { text, translation: activeTranslation } });
-        if (res.error) setError(res.error);
-        setResults(res.references);
-
-        // Auto-display best detected reference immediately
-        const autoVerse =
-          res.references.find((r) => r.text && r.confidence === "high") ??
-          res.references.find((r) => r.text && r.confidence === "medium") ??
-          res.references.find((r) => r.text) ??
-          res.references[0];
-
-        if (autoVerse && autoVerse.reference !== lastAutoRef.current) {
-          lastAutoRef.current = autoVerse.reference;
-          broadcastVerse({
-            reference: autoVerse.reference,
-            text: autoVerse.text,
-            translation: autoVerse.translation,
-            visible: true,
-            ts: Date.now(),
-          });
-          toast.success(`Now showing: ${autoVerse.reference}`, {
-            description: autoVerse.translation,
-            duration: 3000,
-          });
-        }
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Detection failed");
-      } finally {
-        setLoading(false);
-      }
-    },
-    [detect, settings.translation, update],
-  );
+  // Also run AI when manual textarea changes
+  useEffect(() => {
+    if (aiDebounce.current) window.clearTimeout(aiDebounce.current);
+    aiDebounce.current = window.setTimeout(() => runAI(sermon), 800);
+    return () => { if (aiDebounce.current) window.clearTimeout(aiDebounce.current); };
+  }, [sermon, runAI]);
 
   useEffect(() => {
-    if (debounceRef.current) window.clearTimeout(debounceRef.current);
-    debounceRef.current = window.setTimeout(() => runDetect(sermon), 1200);
-    return () => { if (debounceRef.current) window.clearTimeout(debounceRef.current); };
-  }, [sermon, runDetect]);
+    return () => {
+      if (fastDebounce.current) window.clearTimeout(fastDebounce.current);
+      if (aiDebounce.current) window.clearTimeout(aiDebounce.current);
+    };
+  }, []);
 
   const sendToScreen = (r: ResolvedVerse) => {
     lastAutoRef.current = r.reference;
@@ -126,7 +163,15 @@ function OperatorConsole() {
     broadcastVerse({ reference: "", text: null, translation: settings.translation, visible: false, ts: Date.now() });
   };
 
-  const shortTranscript = sermon.length > 120 ? "…" + sermon.slice(-120) : sermon;
+  const clearAll = () => {
+    setSermon("");
+    setResults([]);
+    lastFastRef.current = "";
+    lastAIRef.current = "";
+    lastAutoRef.current = "";
+  };
+
+  const shortTranscript = sermon.length > 140 ? "…" + sermon.slice(-140) : sermon;
 
   return (
     <div className="min-h-screen bg-[#07070c] text-white flex flex-col font-sans">
@@ -144,7 +189,6 @@ function OperatorConsole() {
             </p>
           </div>
         </div>
-
         <div className="flex items-center gap-2">
           <a
             href="/display"
@@ -163,12 +207,8 @@ function OperatorConsole() {
               </button>
             </SheetTrigger>
             <SheetContent className="w-[420px] overflow-y-auto sm:max-w-[420px]">
-              <SheetHeader>
-                <SheetTitle>Church branding</SheetTitle>
-              </SheetHeader>
-              <div className="mt-6">
-                <SettingsPanel settings={settings} update={update} />
-              </div>
+              <SheetHeader><SheetTitle>Church branding</SheetTitle></SheetHeader>
+              <div className="mt-6"><SettingsPanel settings={settings} update={update} /></div>
             </SheetContent>
           </Sheet>
         </div>
@@ -176,16 +216,13 @@ function OperatorConsole() {
 
       <main className="flex-1 grid lg:grid-cols-[1fr_400px] overflow-hidden">
 
-        {/* ── Left: Projector preview + on-air bar ── */}
+        {/* ── Left: preview ── */}
         <div className="flex flex-col p-6 gap-4 border-r border-white/[0.07]">
-
           <div className="flex items-center justify-between">
-            <p className="text-[10px] font-semibold tracking-[0.3em] uppercase text-white/30">
-              Projector preview
-            </p>
+            <p className="text-[10px] font-semibold tracking-[0.3em] uppercase text-white/30">Projector preview</p>
             <div className="flex items-center gap-2">
               {liveVerse.visible && liveVerse.reference && (
-                <span className="text-[10px] text-amber-400/80 bg-amber-400/10 border border-amber-400/20 rounded-full px-2.5 py-0.5 animate-in fade-in duration-300">
+                <span className="text-[10px] text-amber-400/80 bg-amber-400/10 border border-amber-400/20 rounded-full px-2.5 py-0.5">
                   {liveVerse.reference} · {liveVerse.translation}
                 </span>
               )}
@@ -199,10 +236,8 @@ function OperatorConsole() {
             </div>
           </div>
 
-          {/* Preview window */}
           <div className="flex-1 min-h-0 rounded-2xl overflow-hidden border border-white/[0.07] shadow-[0_0_60px_rgba(0,0,0,0.6)] relative">
             <VerseSlide settings={settings} verse={liveVerse} preview />
-            {/* ON AIR badge */}
             {liveVerse.visible && (
               <div className="absolute top-3 right-3 flex items-center gap-1.5 bg-black/60 backdrop-blur-md rounded-full px-2.5 py-1 border border-red-500/30">
                 <Radio className="w-2.5 h-2.5 text-red-400 animate-pulse" />
@@ -216,26 +251,25 @@ function OperatorConsole() {
           </p>
         </div>
 
-        {/* ── Right: Mic + detections ── */}
+        {/* ── Right: mic + detections ── */}
         <div className="flex flex-col overflow-y-auto">
 
           {/* Mic section */}
-          <div className="flex flex-col items-center gap-5 px-6 py-8 border-b border-white/[0.07]">
+          <div className="flex flex-col items-center gap-4 px-6 py-7 border-b border-white/[0.07]">
 
-            {/* Mic button */}
             <div className="relative">
               {isListening && (
                 <>
-                  <span className="absolute inset-0 rounded-full bg-red-500/20 animate-ping" style={{ animationDuration: "1.5s" }} />
-                  <span className="absolute -inset-3 rounded-full border border-red-500/10 animate-ping" style={{ animationDuration: "2s" }} />
+                  <span className="absolute inset-0 rounded-full bg-red-500/15 animate-ping" style={{ animationDuration: "1.5s" }} />
+                  <span className="absolute -inset-4 rounded-full border border-red-500/10 animate-ping" style={{ animationDuration: "2.2s" }} />
                 </>
               )}
               <button
                 onClick={isListening ? stopMic : startMic}
                 disabled={!micSupported}
-                className={`relative w-20 h-20 rounded-full flex items-center justify-center transition-all duration-300 ${
+                className={`relative w-20 h-20 rounded-full flex items-center justify-center transition-all duration-300 select-none ${
                   isListening
-                    ? "bg-red-500/15 border-2 border-red-500 shadow-[0_0_50px_rgba(239,68,68,0.25)]"
+                    ? "bg-red-500/15 border-2 border-red-500 shadow-[0_0_50px_rgba(239,68,68,0.2)]"
                     : micSupported
                       ? "bg-amber-400/10 border-2 border-amber-400/50 hover:bg-amber-400/15 hover:border-amber-400 hover:shadow-[0_0_40px_rgba(251,191,36,0.15)] active:scale-95"
                       : "bg-white/5 border-2 border-white/10 cursor-not-allowed opacity-30"
@@ -250,63 +284,58 @@ function OperatorConsole() {
 
             <div className="text-center space-y-1">
               <p className="text-sm font-semibold text-white/80">
-                {isListening ? "Listening…" : micSupported ? "Tap to start listening" : "Mic not supported"}
+                {isListening ? "Listening…" : micSupported ? "Tap to start" : "Mic unavailable"}
               </p>
               <p className="text-[11px] text-white/30">
                 {isListening
-                  ? "Auto-displaying verses as they're spoken"
+                  ? "Verses appear as the pastor speaks"
                   : micSupported
-                    ? "Chrome or Edge recommended"
+                    ? "Use Chrome or Edge for best results"
                     : "Switch to Chrome or Edge"}
               </p>
             </div>
 
+            {/* Mic permission error */}
+            {micError && (
+              <div className="w-full rounded-xl bg-red-500/10 border border-red-500/20 px-4 py-3 flex gap-2.5 animate-in slide-in-from-bottom-2 duration-300">
+                <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                <p className="text-xs text-red-300/80 leading-relaxed">{micError}</p>
+              </div>
+            )}
+
             {/* Live transcript */}
             {(sermon || interimTranscript) && (
               <div className="w-full rounded-xl bg-white/[0.04] border border-white/[0.08] px-4 py-3 space-y-1.5 animate-in slide-in-from-bottom-2 duration-300">
-                <p className="text-[9px] font-semibold tracking-[0.3em] uppercase text-white/25">Live transcript</p>
+                <p className="text-[9px] font-semibold tracking-[0.3em] uppercase text-white/25">Transcript</p>
                 <p className="text-xs text-white/55 leading-relaxed">
                   {shortTranscript}
-                  {interimTranscript && (
-                    <span className="text-white/25 italic"> {interimTranscript}</span>
-                  )}
+                  {interimTranscript && <span className="text-white/25 italic"> {interimTranscript}</span>}
                 </p>
-                <button
-                  onClick={() => { setSermon(""); setResults([]); lastQueryRef.current = ""; lastAutoRef.current = ""; }}
-                  className="text-[10px] text-white/25 hover:text-white/50 transition-colors"
-                >
+                <button onClick={clearAll} className="text-[10px] text-white/25 hover:text-white/50 transition-colors">
                   Clear
                 </button>
               </div>
             )}
 
-            {/* Status */}
             {loading && (
-              <div className="flex items-center gap-2 animate-in fade-in duration-200">
+              <div className="flex items-center gap-1.5 animate-in fade-in duration-200">
                 <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-bounce" style={{ animationDelay: "0ms" }} />
-                <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-bounce" style={{ animationDelay: "150ms" }} />
-                <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-bounce" style={{ animationDelay: "300ms" }} />
-                <span className="text-[11px] text-amber-400/70 ml-1">Detecting…</span>
+                <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-bounce" style={{ animationDelay: "120ms" }} />
+                <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-bounce" style={{ animationDelay: "240ms" }} />
+                <span className="text-[11px] text-amber-400/60 ml-1">AI scanning…</span>
               </div>
-            )}
-            {error && !loading && (
-              <p className="text-[11px] text-red-400/60 text-center max-w-[220px]">⚠ {error}</p>
             )}
           </div>
 
           {/* Detected references */}
           <div className="flex-1 px-6 py-5 space-y-3">
-            <p className="text-[10px] font-semibold tracking-[0.3em] uppercase text-white/30">
-              Detected references
-            </p>
+            <p className="text-[10px] font-semibold tracking-[0.3em] uppercase text-white/30">Detected references</p>
 
             {results.length === 0 ? (
               <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-white/[0.07] border-dashed py-10">
                 <BookOpen className="w-6 h-6 text-white/15" />
                 <p className="text-xs text-white/25 text-center max-w-[180px] leading-relaxed">
-                  {isListening
-                    ? "Listening for Bible references…"
-                    : "Tap the mic and start preaching"}
+                  {isListening ? "Listening for Bible references…" : "Tap the mic and start preaching"}
                 </p>
               </div>
             ) : (
@@ -323,7 +352,7 @@ function OperatorConsole() {
             )}
           </div>
 
-          {/* Manual input fallback */}
+          {/* Manual input */}
           <div className="px-6 pb-6">
             <details className="group">
               <summary className="text-[10px] text-white/25 cursor-pointer hover:text-white/50 transition-colors select-none list-none flex items-center gap-1.5 mb-2">
@@ -345,27 +374,23 @@ function OperatorConsole() {
 }
 
 function VerseCard({ verse, active, onSend }: { verse: ResolvedVerse; active: boolean; onSend: () => void }) {
-  const confColor =
+  const confDot =
     verse.confidence === "high" ? "bg-emerald-400" :
     verse.confidence === "medium" ? "bg-amber-400" : "bg-red-400";
 
   return (
-    <div
-      className={`group rounded-2xl border p-4 transition-all duration-300 animate-in slide-in-from-bottom-2 ${
-        active
-          ? "border-amber-400/40 bg-gradient-to-b from-amber-400/8 to-amber-400/3 shadow-[0_0_30px_rgba(251,191,36,0.08)]"
-          : "border-white/[0.08] bg-white/[0.03] hover:border-white/15 hover:bg-white/[0.05]"
-      }`}
-    >
-      <div className="flex items-start justify-between gap-3 mb-3">
+    <div className={`group rounded-2xl border p-4 transition-all duration-300 animate-in slide-in-from-bottom-2 ${
+      active
+        ? "border-amber-400/40 bg-gradient-to-b from-amber-400/8 to-transparent shadow-[0_0_30px_rgba(251,191,36,0.06)]"
+        : "border-white/[0.08] bg-white/[0.03] hover:border-white/15"
+    }`}>
+      <div className="flex items-start justify-between gap-3 mb-2.5">
         <div className="space-y-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className={`shrink-0 inline-block w-1.5 h-1.5 rounded-full ${confColor}`} />
-            <span className="font-bold text-amber-400 text-base leading-none truncate">
-              {verse.reference}
-            </span>
+            <span className={`shrink-0 w-1.5 h-1.5 rounded-full ${confDot}`} />
+            <span className="font-bold text-amber-400 text-base leading-none truncate">{verse.reference}</span>
             {active && (
-              <span className="flex items-center gap-1 text-[9px] font-semibold text-red-400 uppercase tracking-widest bg-red-400/10 rounded-full px-1.5 py-0.5">
+              <span className="flex items-center gap-1 text-[9px] font-semibold text-red-400 bg-red-400/10 rounded-full px-1.5 py-0.5">
                 <Radio className="w-2 h-2 animate-pulse" /> Live
               </span>
             )}
@@ -380,23 +405,17 @@ function VerseCard({ verse, active, onSend }: { verse: ResolvedVerse; active: bo
           size="sm"
           onClick={onSend}
           variant={active ? "secondary" : "default"}
-          className={`shrink-0 text-[11px] h-7 px-3 transition-all duration-200 ${
-            active ? "opacity-60" : "opacity-0 group-hover:opacity-100"
-          }`}
+          className={`shrink-0 text-[11px] h-7 px-3 transition-all duration-200 ${active ? "opacity-50" : "opacity-0 group-hover:opacity-100"}`}
         >
           {active ? "On screen" : "Display"}
         </Button>
       </div>
 
       {verse.text ? (
-        <p className="text-sm text-white/70 leading-relaxed line-clamp-4">
-          {verse.text}
-        </p>
+        <p className="text-sm text-white/70 leading-relaxed">{verse.text}</p>
       ) : (
         <p className="text-xs text-white/25 italic leading-relaxed">
-          {verse.error
-            ? `Couldn't fetch verse text — ${verse.error}`
-            : "Reference detected — no specific verse to display"}
+          {verse.error ? `Couldn't fetch — ${verse.error}` : "Reference detected — no specific verse text"}
         </p>
       )}
     </div>

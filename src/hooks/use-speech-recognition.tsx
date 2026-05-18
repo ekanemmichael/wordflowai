@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-// Web Speech API types (not yet in all TS DOM libs)
 interface ISpeechRecognition extends EventTarget {
   continuous: boolean;
   interimResults: boolean;
@@ -17,11 +16,12 @@ interface ISpeechRecognitionEvent extends Event {
   results: SpeechRecognitionResultList;
 }
 interface ISpeechRecognitionCtor {
-  new (): ISpeechRecognition;
+  new(): ISpeechRecognition;
 }
 
 type UseSpeechRecognitionOptions = {
   onFinalResult: (text: string) => void;
+  onInterim?: (text: string) => void;
   lang?: string;
 };
 
@@ -29,11 +29,12 @@ type UseSpeechRecognitionReturn = {
   interimTranscript: string;
   isListening: boolean;
   supported: boolean;
+  micError: string | null;
   start: () => void;
   stop: () => void;
 };
 
-function getSpeechRecognitionCtor(): ISpeechRecognitionCtor | null {
+function getSR(): ISpeechRecognitionCtor | null {
   if (typeof window === "undefined") return null;
   const w = window as unknown as Record<string, unknown>;
   return (w["SpeechRecognition"] ?? w["webkitSpeechRecognition"] ?? null) as ISpeechRecognitionCtor | null;
@@ -41,23 +42,25 @@ function getSpeechRecognitionCtor(): ISpeechRecognitionCtor | null {
 
 export function useSpeechRecognition({
   onFinalResult,
+  onInterim,
   lang = "en-US",
 }: UseSpeechRecognitionOptions): UseSpeechRecognitionReturn {
   const [isListening, setIsListening] = useState(false);
   const [interimTranscript, setInterimTranscript] = useState("");
-  // Start false to avoid SSR mismatch — set to real value after mount
   const [supported, setSupported] = useState(false);
+  const [micError, setMicError] = useState<string | null>(null);
+
   const recognitionRef = useRef<ISpeechRecognition | null>(null);
   const keepAliveRef = useRef(false);
   const onFinalRef = useRef(onFinalResult);
+  const onInterimRef = useRef(onInterim);
   onFinalRef.current = onFinalResult;
+  onInterimRef.current = onInterim;
 
-  useEffect(() => {
-    setSupported(getSpeechRecognitionCtor() !== null);
-  }, []);
+  useEffect(() => { setSupported(getSR() !== null); }, []);
 
   const buildRecognition = useCallback((): ISpeechRecognition | null => {
-    const SR = getSpeechRecognitionCtor();
+    const SR = getSR();
     if (!SR) return null;
 
     const r = new SR();
@@ -65,7 +68,7 @@ export function useSpeechRecognition({
     r.interimResults = true;
     r.lang = lang;
 
-    r.onstart = () => setIsListening(true);
+    r.onstart = () => { setIsListening(true); setMicError(null); };
 
     r.onresult = (event: ISpeechRecognitionEvent) => {
       let finalText = "";
@@ -79,20 +82,41 @@ export function useSpeechRecognition({
       }
       if (finalText) onFinalRef.current(finalText.trim());
       setInterimTranscript(interim);
+      if (interim) onInterimRef.current?.(interim);
     };
 
-    r.onerror = () => {
+    r.onerror = (e: Event) => {
+      const errorCode = (e as Event & { error?: string }).error ?? "";
       setInterimTranscript("");
+
+      if (errorCode === "not-allowed" || errorCode === "service-not-allowed") {
+        keepAliveRef.current = false;
+        setIsListening(false);
+        setMicError("Microphone access was denied. Click the lock icon in your browser's address bar and allow microphone access, then try again.");
+        return;
+      }
+
+      if (errorCode === "no-speech" || errorCode === "audio-capture") {
+        // Non-fatal — restart if still wanted
+        if (keepAliveRef.current) {
+          setTimeout(() => {
+            if (!keepAliveRef.current) return;
+            const next = buildRecognition();
+            if (next) { recognitionRef.current = next; try { next.start(); } catch { /* ignore */ } }
+          }, 300);
+        } else {
+          setIsListening(false);
+        }
+        return;
+      }
+
+      // Unknown error — restart if still wanted
       if (keepAliveRef.current) {
         setTimeout(() => {
-          if (keepAliveRef.current) {
-            const next = buildRecognition();
-            if (next) {
-              recognitionRef.current = next;
-              next.start();
-            }
-          }
-        }, 300);
+          if (!keepAliveRef.current) return;
+          const next = buildRecognition();
+          if (next) { recognitionRef.current = next; try { next.start(); } catch { /* ignore */ } }
+        }, 500);
       } else {
         setIsListening(false);
       }
@@ -100,13 +124,9 @@ export function useSpeechRecognition({
 
     r.onend = () => {
       setInterimTranscript("");
-      // Web Speech API stops after silence — restart if still wanted
       if (keepAliveRef.current) {
         const next = buildRecognition();
-        if (next) {
-          recognitionRef.current = next;
-          try { next.start(); } catch { /* ignore */ }
-        }
+        if (next) { recognitionRef.current = next; try { next.start(); } catch { /* ignore */ } }
       } else {
         setIsListening(false);
       }
@@ -116,6 +136,7 @@ export function useSpeechRecognition({
   }, [lang]);
 
   const start = useCallback(() => {
+    setMicError(null);
     keepAliveRef.current = true;
     const r = buildRecognition();
     if (!r) return;
@@ -132,11 +153,8 @@ export function useSpeechRecognition({
   }, []);
 
   useEffect(() => {
-    return () => {
-      keepAliveRef.current = false;
-      recognitionRef.current?.stop();
-    };
+    return () => { keepAliveRef.current = false; recognitionRef.current?.stop(); };
   }, []);
 
-  return { interimTranscript, isListening, supported, start, stop };
+  return { interimTranscript, isListening, supported, micError, start, stop };
 }
