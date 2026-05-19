@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { lazy, Suspense } from "react";
 
-const OperatorConsole = lazy(() => import("@/components/OperatorConsole"));
+const AppShell = lazy(() => import("@/components/AppShell"));
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -12,7 +12,7 @@ export const Route = createFileRoute("/")({
   }),
   component: () => (
     <Suspense fallback={<div className="min-h-screen bg-[#07070c]" />}>
-      <OperatorConsole />
+      <AppShell />
     </Suspense>
   ),
 });
