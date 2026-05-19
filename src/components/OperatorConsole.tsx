@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
-import { detectAndFetch, detectExplicit, type ResolvedVerse } from "@/lib/bible.client";
+import { detectAndFetch, detectExplicit, type ResolvedVerse } from "@/lib/bible.detect";
 import { detectVerses } from "@/lib/bible.functions";
 import { broadcastVerse, useActiveVerse, useSettings } from "@/lib/store";
 import { useSpeechRecognition } from "@/hooks/use-speech-recognition";
